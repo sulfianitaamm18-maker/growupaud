@@ -1,0 +1,274 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Helper functions
+    function isAuthenticated() {
+      return request.auth != null;
+    }
+
+    function existsUserData() {
+      return exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function getUserData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function getUserRole() {
+      return existsUserData() ? getUserData().role : '';
+    }
+
+    function getUserSchoolId() {
+      return existsUserData() ? getUserData().schoolId : '';
+    }
+
+    function isUserActive() {
+      return existsUserData() && getUserData().isActive == true;
+    }
+
+    function isOwner(userId) {
+      return isAuthenticated() && request.auth.uid == userId;
+    }
+
+    function isSuperAdmin() {
+      return isAuthenticated() && isUserActive() && (
+        getUserRole() == 'SUPER_ADMIN'
+      );
+    }
+
+    function isAdmin() {
+      return isAuthenticated() && isUserActive() && (
+        getUserRole() == 'ADMIN' || 
+        getUserRole() == 'SUPER_ADMIN' || 
+        request.auth.token.role == 'ADMIN'
+      );
+    }
+
+    function isPrincipal() {
+      return isAuthenticated() && isUserActive() && (
+        getUserRole() == 'PRINCIPAL' || 
+        getUserRole() == 'KEPALA_SEKOLAH'
+      );
+    }
+
+    function isTeacher() {
+      return isAuthenticated() && isUserActive() && (
+        getUserRole() == 'TEACHER' || 
+        getUserRole() == 'GURU'
+      );
+    }
+
+    function isParent() {
+      return isAuthenticated() && isUserActive() && (
+        getUserRole() == 'PARENT' || 
+        getUserRole() == 'ORANG_TUA'
+      );
+    }
+
+    // Collection 1: users/{userId}
+    match /users/{userId} {
+      // 1. Owner can read their own profile directly (NO recursive get() or helper calls)
+      allow read: if request.auth != null && request.auth.uid == userId;
+
+      // 2. Admin/Principal in the SAME school (or SuperAdmin) can read profiles in their school
+      allow read: if request.auth != null && (
+        ((isAdmin() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin()
+      );
+
+      // 3. User creation:
+      // - Admin can create profiles for their school
+      // - Non-admin user creating their OWN profile: CANNOT set role to ADMIN or SUPER_ADMIN
+      allow create: if request.auth != null && (
+        (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin() ||
+        (
+          request.auth.uid == userId &&
+          !(request.resource.data.role in ['ADMIN', 'SUPER_ADMIN'])
+        )
+      );
+
+      // 4. User update:
+      // - Admin can update users in their school AND cannot move them to another school
+      // - Regular user can update their own profile EXCEPT role, schoolId, isActive, studentIds, linkedStudentIds, childId, parentIds
+      allow update: if (
+        isAdmin() && 
+        resource.data.schoolId == getUserSchoolId() &&
+        request.resource.data.schoolId == getUserSchoolId()
+      ) || 
+      isSuperAdmin() || 
+      (
+        request.auth != null && request.auth.uid == userId &&
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'role', 'schoolId', 'isActive', 'studentIds', 'linkedStudentIds', 'childId', 'parentIds'
+        ])
+      );
+
+      // 5. User deletion: Only Admin for users in their school
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 2: schools/{schoolId}
+    match /schools/{schoolId} {
+      allow read: if isAuthenticated() && (getUserSchoolId() == schoolId || isSuperAdmin());
+      allow write: if (isAdmin() && getUserSchoolId() == schoolId) || isSuperAdmin();
+    }
+
+    // Collection 3: classes/{classId}
+    match /classes/{classId} {
+      // Read access: Admin, Principal, Teacher in the same school
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal() || isTeacher()) && resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin()
+      );
+
+      // Create access: Admin in the same school
+      allow create: if (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+
+      // Update access: Admin in the same school (cannot change schoolId)
+      allow update: if (
+        isAdmin() && 
+        resource.data.schoolId == getUserSchoolId() && 
+        request.resource.data.schoolId == getUserSchoolId()
+      ) || isSuperAdmin();
+
+      // Delete access: Admin in the same school
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 4: students/{studentId}
+    match /students/{studentId} {
+      // Read access:
+      // - Admin / Principal / Teacher: read students in same school
+      // - Parent: ONLY read student if parent's UID is listed in parentIds or linked in parent's user profile
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() && (
+          ('parentIds' in resource.data && request.auth.uid in resource.data.parentIds) ||
+          ('studentIds' in getUserData() && resource.data.id in getUserData().studentIds) ||
+          ('linkedStudentIds' in getUserData() && resource.data.id in getUserData().linkedStudentIds) ||
+          ('childId' in getUserData() && resource.data.id == getUserData().childId)
+        ))
+      );
+
+      // Write access:
+      // - ONLY Admin can create, update, or delete student master records in their school!
+      allow create: if (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow update: if (
+        isAdmin() && 
+        resource.data.schoolId == getUserSchoolId() && 
+        request.resource.data.schoolId == getUserSchoolId()
+      ) || isSuperAdmin();
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 5: observations/{obsId}
+    match /observations/{obsId} {
+      // Read access:
+      // - Admin / Principal / Teacher: read observations in same school
+      // - Parent: ONLY read observation if parent of the target student
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isParent() && (
+            ('parentIds' in resource.data && request.auth.uid in resource.data.parentIds) ||
+            ('studentIds' in getUserData() && resource.data.studentId in getUserData().studentIds) ||
+            ('linkedStudentIds' in getUserData() && resource.data.studentId in getUserData().linkedStudentIds) ||
+            ('childId' in getUserData() && resource.data.studentId == getUserData().childId) ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              'parentIds' in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data &&
+              request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentIds
+            )
+          )
+        )
+      );
+
+      // Create access:
+      // - Teacher: can create observation if teacherId matches auth.uid and schoolId matches
+      // - Admin: can create in their school
+      // - Principal & Parent: DENY
+      allow create: if (
+        (isAdmin() && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && 
+          request.resource.data.teacherId == request.auth.uid && 
+          request.resource.data.schoolId == getUserSchoolId()
+        )
+      );
+
+      // Update access:
+      // - Teacher: can update own observation in same school (cannot change teacherId or schoolId)
+      // - Admin: can update in same school
+      // - Principal & Parent: DENY
+      allow update: if (
+        (
+          isAdmin() && 
+          resource.data.schoolId == getUserSchoolId() && 
+          request.resource.data.schoolId == getUserSchoolId()
+        ) || 
+        isSuperAdmin() || 
+        (
+          isTeacher() && 
+          resource.data.teacherId == request.auth.uid && 
+          request.resource.data.teacherId == request.auth.uid && 
+          resource.data.schoolId == getUserSchoolId() && 
+          request.resource.data.schoolId == getUserSchoolId()
+        )
+      );
+
+      // Delete access:
+      // - Teacher: can delete own observation in same school
+      // - Admin: can delete in same school
+      // - Principal & Parent: DENY
+      allow delete: if (
+        (isAdmin() && resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin() ||
+        (
+          isTeacher() && 
+          resource.data.teacherId == request.auth.uid && 
+          resource.data.schoolId == getUserSchoolId()
+        )
+      );
+    }
+
+    // Collection 6: feedbacks/{feedbackId}
+    match /feedbacks/{feedbackId} {
+      // Read access:
+      // - Admin / Principal / Teacher: can read feedbacks in their school
+      // - Parent: can read feedbacks where they are author or related to student
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() && (resource.data.parentId == request.auth.uid || resource.data.schoolId == getUserSchoolId()))
+      );
+
+      // Create access:
+      // - Parent can create feedback for their school
+      // - Admin / Principal / Teacher can create
+      allow create: if isAuthenticated() && isUserActive() && (
+        (isParent() && request.resource.data.parentId == request.auth.uid && request.resource.data.schoolId == getUserSchoolId()) ||
+        ((isAdmin() || isTeacher() || isPrincipal()) && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
+      );
+
+      // Update access:
+      // - Teacher, Principal, or Admin in same school can update (e.g. replyFromTeacher / reply)
+      // - Parent can update their own feedback
+      allow update: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isTeacher() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() && resource.data.parentId == request.auth.uid && resource.data.schoolId == getUserSchoolId())
+      );
+
+      // Delete access:
+      allow delete: if isAuthenticated() && isUserActive() && (
+        (isAdmin() && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() && resource.data.parentId == request.auth.uid)
+      );
+    }
+
+    // Default Deny for all unlisted collections
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

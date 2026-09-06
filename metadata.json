@@ -1,0 +1,6 @@
+{
+  "name": "GrowUPAUD - Platform Asesmen PAUD Berbasis AI",
+  "description": "Platform asesmen autentik anak usia dini (PAUD) Kurikulum Merdeka terintegrasi dengan observasi harian, portofolio digital, dan AI Assessment Intelligence (GAI) untuk Guru, Orang Tua, Kepala Sekolah, dan Super Admin.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
