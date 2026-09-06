@@ -56,33 +56,18 @@ async function startServer() {
   const app = express();
   const PORT = 3000;
 
-  app.use(express.json());
+  app.use(express.json({ limit: '6mb' }));
 
-  // Check if server-side ADMIN_NEW_PASSWORD is provided to update admin password dynamically
-  if (process.env.ADMIN_NEW_PASSWORD && process.env.ADMIN_NEW_PASSWORD.length >= 6) {
-    try {
-      const appInstance = getAdminApp();
-      const adminAuth = getAuth(appInstance);
-      const adminDb = getFirestore(appInstance);
-
-      // Dynamically locate existing ADMIN or SUPER_ADMIN user
-      const adminSnap = await adminDb
-        .collection('users')
-        .where('role', 'in', ['ADMIN', 'SUPER_ADMIN'])
-        .limit(1)
-        .get();
-
-      if (!adminSnap.empty) {
-        const adminDoc = adminSnap.docs[0];
-        const targetUid = adminDoc.id;
-        await adminAuth.updateUser(targetUid, {
-          password: process.env.ADMIN_NEW_PASSWORD,
-        });
-        console.log(`[SERVER] Admin password updated dynamically for UID ${targetUid}.`);
-      }
-    } catch (err: any) {
-      console.error('[SERVER] Startup admin password update warning:', err?.message || err);
+  const aiRateMap = new Map<string, { windowStart: number; count: number }>();
+  function enforceAIRateLimit(uid: string) {
+    const now = Date.now();
+    const entry = aiRateMap.get(uid);
+    if (!entry || now - entry.windowStart >= 60_000) {
+      aiRateMap.set(uid, { windowStart: now, count: 1 });
+      return;
     }
+    entry.count += 1;
+    if (entry.count > 30) throw { status: 429, error: 'RATE_LIMITED', message: 'Batas penggunaan AI sementara tercapai. Silakan coba lagi.' };
   }
 
   // Helper to format Auth email
@@ -122,12 +107,60 @@ async function startServer() {
     }
 
     const callerData = callerDoc.data();
-    const isCallerAdmin = (callerData?.role === 'ADMIN' || callerData?.role === 'SUPER_ADMIN') && callerData?.isActive;
+    const isCallerAdmin = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR'].includes(String(callerData?.role || '').toUpperCase()) && callerData?.isActive;
     if (!isCallerAdmin) {
       throw { status: 403, error: 'FORBIDDEN', message: 'Akses ditolak: Hanya ADMIN atau SUPER_ADMIN aktif yang berwenang.' };
     }
 
     return { callerUid, callerData, adminAuth, adminDb };
+  }
+
+  async function verifyAICaller(req: express.Request, allowedRoles: string[] = ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'PRINCIPAL', 'TEACHER', 'GURU']) {
+    const authHeader = req.headers.authorization;
+    if (!authHeader?.startsWith('Bearer ')) {
+      throw { status: 401, error: 'UNAUTHORIZED', message: 'Token otentikasi tidak ditemukan.' };
+    }
+    const token = authHeader.slice(7);
+    const appInstance = getAdminApp();
+    const adminAuth = getAuth(appInstance);
+    const adminDb = getFirestore(appInstance);
+    let decoded;
+    try {
+      decoded = await adminAuth.verifyIdToken(token);
+    } catch {
+      throw { status: 401, error: 'INVALID_TOKEN', message: 'Token AI tidak valid atau telah kedaluwarsa.' };
+    }
+    const profileSnap = await adminDb.collection('users').doc(decoded.uid).get();
+    if (!profileSnap.exists) throw { status: 403, error: 'FORBIDDEN', message: 'Profil pengguna tidak ditemukan.' };
+    const profile = profileSnap.data() || {};
+    const role = String(profile.role || '').toUpperCase();
+    if (!profile.isActive || !allowedRoles.includes(role)) {
+      throw { status: 403, error: 'FORBIDDEN', message: 'Akses AI tidak diizinkan untuk akun ini.' };
+    }
+    enforceAIRateLimit(decoded.uid);
+    return { uid: decoded.uid, role, profile, adminDb };
+  }
+
+  async function verifyAIStudentAccess(adminDb: any, caller: any, studentId: string) {
+    if (!studentId || typeof studentId !== 'string') {
+      throw { status: 400, error: 'STUDENT_ID_REQUIRED', message: 'studentId wajib disertakan.' };
+    }
+    const studentSnap = await adminDb.collection('students').doc(studentId).get();
+    if (!studentSnap.exists) throw { status: 404, error: 'STUDENT_NOT_FOUND', message: 'Data anak tidak ditemukan.' };
+    const student = studentSnap.data() || {};
+    if (caller.role !== 'SUPER_ADMIN' && student.schoolId !== caller.profile.schoolId) {
+      throw { status: 403, error: 'FORBIDDEN', message: 'Akses terhadap data anak ditolak.' };
+    }
+    if (caller.role === 'TEACHER' || caller.role === 'GURU') {
+      const teacherId = caller.uid;
+      const assigned = Array.isArray(student.teacherIds) && student.teacherIds.includes(teacherId);
+      const classMatch = (caller.profile.classId && student.classId && caller.profile.classId === student.classId) ||
+        (caller.profile.className && student.className && caller.profile.className === student.className);
+      if (!assigned && !classMatch) {
+        throw { status: 403, error: 'FORBIDDEN', message: 'Guru hanya dapat menganalisis anak yang menjadi tanggung jawabnya.' };
+      }
+    }
+    return student;
   }
 
   // Health check API
@@ -166,19 +199,21 @@ async function startServer() {
         firestoreMap.set(d.id, d.data());
       });
 
-      const results = authList.users.map((u) => {
-        const firestoreData = firestoreMap.get(u.uid);
-        const profileExists = !!firestoreData;
-        return {
+      const results = authList.users
+        .map((u) => {
+          const firestoreData = firestoreMap.get(u.uid);
+          const profileExists = !!firestoreData;
+          return {
           uid: u.uid,
           email: u.email || '',
           displayName: u.displayName || firestoreData?.name || firestoreData?.displayName || '',
           authExists: true,
           profileExists,
           profile: firestoreData || null,
-          createdAt: u.metadata?.creationTime || firestoreData?.createdAt || null,
-        };
-      });
+            createdAt: u.metadata?.creationTime || firestoreData?.createdAt || null,
+          };
+        })
+        .filter((entry) => callerData?.role === 'SUPER_ADMIN' || entry.profile?.schoolId === schoolId);
 
       res.json({
         success: true,
@@ -219,7 +254,7 @@ async function startServer() {
         });
       }
 
-      const validRoles = ['ADMIN', 'PRINCIPAL', 'TEACHER', 'PARENT'];
+      const validRoles = ['ADMIN', 'PRINCIPAL', 'TEACHER', 'PARENT', 'OPERATOR'];
       if (!validRoles.includes(role)) {
         return res.status(400).json({
           success: false,
@@ -254,6 +289,28 @@ async function startServer() {
         });
       }
 
+      const targetSchoolId = callerData?.role === 'SUPER_ADMIN'
+        ? (schoolId || callerData?.schoolId || 'main-school')
+        : (callerData?.schoolId || 'main-school');
+      const targetSchoolName = schoolName || 'Sekolah PAUD';
+      const normalizedSelectedStudentIds = Array.isArray(selectedStudentIds)
+        ? [...new Set(selectedStudentIds.filter((id: unknown): id is string => typeof id === 'string' && id.trim().length > 0))]
+        : [];
+
+      if (role === 'PARENT' && normalizedSelectedStudentIds.length > 0) {
+        const studentDocs = await Promise.all(
+          normalizedSelectedStudentIds.map((studentId) => adminDb.collection('students').doc(studentId).get())
+        );
+        const invalidStudent = studentDocs.find((docSnap) => !docSnap.exists || docSnap.data()?.schoolId !== targetSchoolId);
+        if (invalidStudent) {
+          return res.status(400).json({
+            success: false,
+            error: 'INVALID_STUDENT_ASSIGNMENT',
+            message: 'Anak yang dipilih tidak valid atau berasal dari sekolah berbeda.',
+          });
+        }
+      }
+
       // Step 1: Create Firebase Auth user
       let userRecord;
       try {
@@ -274,10 +331,6 @@ async function startServer() {
       }
 
       const uid = userRecord.uid;
-      const targetSchoolId = callerData?.role === 'SUPER_ADMIN'
-        ? (schoolId || callerData?.schoolId || 'main-school')
-        : (callerData?.schoolId || 'main-school');
-      const targetSchoolName = schoolName || 'Sekolah PAUD';
 
       // Set custom claims for server-authoritative token validation
       try {
@@ -308,14 +361,14 @@ async function startServer() {
         schoolId: targetSchoolId,
         schoolName: targetSchoolName,
         isActive: isActive !== false,
-        studentIds: Array.isArray(selectedStudentIds) ? selectedStudentIds : [],
-        linkedStudentIds: Array.isArray(selectedStudentIds) ? selectedStudentIds : [],
+        studentIds: normalizedSelectedStudentIds,
+        linkedStudentIds: normalizedSelectedStudentIds,
         createdAt: now,
         updatedAt: now,
       };
 
-      if (Array.isArray(selectedStudentIds) && selectedStudentIds.length > 0) {
-        profileData.childId = selectedStudentIds[0];
+      if (normalizedSelectedStudentIds.length > 0) {
+        profileData.childId = normalizedSelectedStudentIds[0];
       }
       if (role === 'TEACHER' && className) {
         profileData.className = className;
@@ -326,6 +379,9 @@ async function startServer() {
         console.log(`[SERVER] Created Firestore profile users/${uid} for ${cleanUsername}`);
       } catch (firestoreErr: any) {
         console.error(`[SERVER] Failed creating Firestore profile users/${uid}:`, firestoreErr);
+        try { await adminAuth.deleteUser(uid); } catch (rollbackErr) {
+          console.error('[SERVER] Failed to rollback Auth user after profile creation failure:', rollbackErr);
+        }
         return res.status(500).json({
           success: false,
           error: 'FIRESTORE_PROFILE_FAILED',
@@ -333,6 +389,21 @@ async function startServer() {
             'Akun Auth berhasil dibuat, tetapi profil Firestore gagal dibuat. Silakan gunakan tombol "Sinkronkan Profil" untuk akun ini.',
           uid,
         });
+      }
+
+      // Step 2b: If a teacher is assigned to a class, persist the teacher assignment
+      // on the authoritative class record and on the teacher profile.
+      if (role === 'TEACHER' && className) {
+        const classSnap = await adminDb.collection('classes')
+          .where('schoolId', '==', targetSchoolId)
+          .where('name', '==', className)
+          .limit(1)
+          .get();
+        if (!classSnap.empty) {
+          const classRef = classSnap.docs[0].ref;
+          await classRef.update({ teacherId: uid, teacherName: name, updatedAt: now });
+          await adminDb.collection('users').doc(uid).update({ classId: classSnap.docs[0].id });
+        }
       }
 
       // Step 3: If parent role with selected students, update student parentIds
@@ -429,7 +500,7 @@ async function startServer() {
       const inferredEmail = authUser.email || formatAuthEmail(username || 'user');
       const cleanUsername = (username || (inferredEmail.split('@')[0] ?? 'user')).toLowerCase().trim();
       const targetName = name || authUser.displayName || cleanUsername;
-      const validRoles = ['ADMIN', 'PRINCIPAL', 'TEACHER', 'PARENT'];
+      const validRoles = ['ADMIN', 'PRINCIPAL', 'TEACHER', 'PARENT', 'OPERATOR'];
       const targetRole = validRoles.includes(role) ? role : 'TEACHER';
       const targetSchoolId = callerData?.role === 'SUPER_ADMIN'
         ? (schoolId || callerData?.schoolId || 'main-school')
@@ -558,6 +629,7 @@ async function startServer() {
   // 1. Rekomendasi Perencanaan & Kurikulum (CP, ATP, TP, Kegiatan, Loose Parts)
   app.post('/api/ai/lesson-plan-recommendation', async (req, res) => {
     try {
+      await verifyAICaller(req, ['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'PRINCIPAL', 'TEACHER', 'GURU']);
       const {
         theme = 'Aku Sayang Bumi',
         subtheme = 'Tanaman di Sekitarku',
@@ -766,6 +838,9 @@ KEMBALIKAN HANYA JSON DENGAN FORMAT BERIKUT:
   // 2. Analisis Observasi & Triangulasi Data (AI hanya memberi SARAN, Guru adalah pengambil keputusan)
   app.post('/api/ai/analyze-observation', async (req, res) => {
     try {
+      const caller = await verifyAICaller(req, ['ADMIN', 'SUPER_ADMIN', 'TEACHER', 'GURU']);
+      const requestedStudentId = typeof req.body?.studentId === 'string' ? req.body.studentId.trim() : '';
+      await verifyAIStudentAccess(caller.adminDb, caller, requestedStudentId);
       const {
         studentName = 'Ananda',
         studentAge = '5 Tahun',
@@ -869,6 +944,9 @@ KEMBALIKAN HANYA JSON DENGAN STRUKTUR BERIKUT:
   // 3. Analisis Foto Dokumentasi Pembelajaran PAUD
   app.post('/api/ai/analyze-photo', async (req, res) => {
     try {
+      const caller = await verifyAICaller(req, ['ADMIN', 'SUPER_ADMIN', 'TEACHER', 'GURU']);
+      const requestedStudentId = typeof req.body?.studentId === 'string' ? req.body.studentId.trim() : '';
+      await verifyAIStudentAccess(caller.adminDb, caller, requestedStudentId);
       const {
         activityTitle = 'Kegiatan Pembelajaran',
         teacherNotes = '',
@@ -938,21 +1016,16 @@ KEMBALIKAN HANYA JSON:
       }
 
       const fallbackResult = {
-        visualDescription: `Dokumentasi menunjukkan keaktifan anak dalam berproses pada kegiatan "${activityTitle}". Terlihat koordinasi gerakan dan interaksi langsung dengan media bermain.`,
-        suggestedAspects: ['MOTORIK_HALUS', 'LITERASI_STEAM', 'JATI_DIRI'],
-        potentialBehaviors: [
-          'Menunjukkan koordinasi visual-motorik yang baik saat mengoperasikan media kegiatan.',
-          'Memperlihatkan ekspresi konsentrasi dan rasa ingin tahu yang tinggi terhadap benda di depannya.',
-          'Mencoba menyusun atau mengeksplorasi media dengan cara unik dan mandiri.',
-        ],
+        visualDescription: 'Analisis visual otomatis belum tersedia. Gunakan foto sebagai bukti pendukung dan lengkapi deskripsi berdasarkan apa yang benar-benar diamati guru.',
+        suggestedAspects: [],
+        potentialBehaviors: [],
         suggestedFollowUpQuestions: [
-          'Bagaimana caramu menyusun benda ini sehingga bisa berdiri seimbang?',
-          'Ceritakan pada Ibu guru, apa yang sedang kamu buat ini?',
+          'Apa yang benar-benar tampak dilakukan anak pada dokumentasi ini?',
+          'Bukti perilaku apa yang dapat diverifikasi melalui pengamatan langsung?'
         ],
-        pedagogicInsight: 'Apresiasi proses usaha anak daripada hasil jadinya. Sediakan media variatif tambahan jika anak ingin memperluas kreasinya.',
+        pedagogicInsight: 'Dokumentasi foto tidak boleh menjadi satu-satunya dasar penilaian. Validasi dengan pengamatan autentik guru.'
       };
-
-      return res.json({ success: true, data: fallbackResult, source: 'fallback' });
+      return res.json({ success: true, data: fallbackResult, source: 'safe-fallback' });
     } catch (error: any) {
       console.error('[SERVER] analyze-photo error:', error);
       return res.status(500).json({ success: false, message: 'Gagal menganalisis foto kegiatan.' });

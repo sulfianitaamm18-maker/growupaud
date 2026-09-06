@@ -39,10 +39,13 @@ service cloud.firestore {
 
     function isAdmin() {
       return isAuthenticated() && isUserActive() && (
-        getUserRole() == 'ADMIN' || 
-        getUserRole() == 'SUPER_ADMIN' || 
-        request.auth.token.role == 'ADMIN'
+        getUserRole() == 'ADMIN' ||
+        getUserRole() == 'SUPER_ADMIN'
       );
+    }
+
+    function isOperator() {
+      return isAuthenticated() && isUserActive() && getUserRole() == 'OPERATOR';
     }
 
     function isPrincipal() {
@@ -73,27 +76,18 @@ service cloud.firestore {
 
       // 2. Admin/Principal in the SAME school (or SuperAdmin) can read profiles in their school
       allow read: if request.auth != null && (
-        ((isAdmin() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
+        ((isAdmin() || isOperator() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
         isSuperAdmin()
       );
 
-      // 3. User creation:
-      // - Admin can create profiles for their school
-      // - Non-admin user creating their OWN profile: CANNOT set role to ADMIN or SUPER_ADMIN
-      allow create: if request.auth != null && (
-        (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) ||
-        isSuperAdmin() ||
-        (
-          request.auth.uid == userId &&
-          !(request.resource.data.role in ['ADMIN', 'SUPER_ADMIN'])
-        )
-      );
+      // 3. User creation: privileged profiles are server-provisioned only.
+      allow create: if ((isAdmin() || isOperator()) && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
 
       // 4. User update:
       // - Admin can update users in their school AND cannot move them to another school
       // - Regular user can update their own profile EXCEPT role, schoolId, isActive, studentIds, linkedStudentIds, childId, parentIds
       allow update: if (
-        isAdmin() && 
+        isAdmin() &&
         resource.data.schoolId == getUserSchoolId() &&
         request.resource.data.schoolId == getUserSchoolId()
       ) || 
@@ -106,35 +100,35 @@ service cloud.firestore {
       );
 
       // 5. User deletion: Only Admin for users in their school
-      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow delete: if ((isAdmin() || isOperator()) && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
     }
 
     // Collection 2: schools/{schoolId}
     match /schools/{schoolId} {
       allow read: if isAuthenticated() && (getUserSchoolId() == schoolId || isSuperAdmin());
-      allow write: if (isAdmin() && getUserSchoolId() == schoolId) || isSuperAdmin();
+      allow write: if ((isAdmin() || isOperator()) && getUserSchoolId() == schoolId) || isSuperAdmin();
     }
 
     // Collection 3: classes/{classId}
     match /classes/{classId} {
       // Read access: Admin, Principal, Teacher in the same school
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isPrincipal() || isTeacher()) && resource.data.schoolId == getUserSchoolId()) ||
+        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && resource.data.schoolId == getUserSchoolId()) ||
         isSuperAdmin()
       );
 
       // Create access: Admin in the same school
-      allow create: if (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow create: if ((isAdmin() || isOperator()) && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
 
       // Update access: Admin in the same school (cannot change schoolId)
       allow update: if (
-        isAdmin() && 
-        resource.data.schoolId == getUserSchoolId() && 
+        (isAdmin() || isOperator()) &&
+        resource.data.schoolId == getUserSchoolId() &&
         request.resource.data.schoolId == getUserSchoolId()
       ) || isSuperAdmin();
 
       // Delete access: Admin in the same school
-      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow delete: if ((isAdmin() || isOperator()) && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
     }
 
     // Collection 4: students/{studentId}
@@ -143,21 +137,19 @@ service cloud.firestore {
       // - Admin / Principal / Teacher: read students in same school
       // - Parent: ONLY read student if parent's UID is listed in parentIds or linked in parent's user profile
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() && (
-          ('parentIds' in resource.data && request.auth.uid in resource.data.parentIds) ||
-          ('studentIds' in getUserData() && resource.data.id in getUserData().studentIds) ||
-          ('linkedStudentIds' in getUserData() && resource.data.id in getUserData().linkedStudentIds) ||
-          ('childId' in getUserData() && resource.data.id == getUserData().childId)
-        ))
+        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() &&
+          'parentIds' in resource.data &&
+          request.auth.uid in resource.data.parentIds
+        )
       );
 
       // Write access:
       // - ONLY Admin can create, update, or delete student master records in their school!
       allow create: if (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
       allow update: if (
-        isAdmin() && 
-        resource.data.schoolId == getUserSchoolId() && 
+        (isAdmin() || isOperator()) &&
+        resource.data.schoolId == getUserSchoolId() &&
         request.resource.data.schoolId == getUserSchoolId()
       ) || isSuperAdmin();
       allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
@@ -169,19 +161,12 @@ service cloud.firestore {
       // - Admin / Principal / Teacher: read observations in same school
       // - Parent: ONLY read observation if parent of the target student
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
         (
-          isParent() && (
-            ('parentIds' in resource.data && request.auth.uid in resource.data.parentIds) ||
-            ('studentIds' in getUserData() && resource.data.studentId in getUserData().studentIds) ||
-            ('linkedStudentIds' in getUserData() && resource.data.studentId in getUserData().linkedStudentIds) ||
-            ('childId' in getUserData() && resource.data.studentId == getUserData().childId) ||
-            (
-              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
-              'parentIds' in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data &&
-              request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentIds
-            )
-          )
+          isParent() &&
+          exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+          'parentIds' in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data &&
+          request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentIds
         )
       );
 
@@ -239,15 +224,20 @@ service cloud.firestore {
       // - Admin / Principal / Teacher: can read feedbacks in their school
       // - Parent: can read feedbacks where they are author or related to student
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() && (resource.data.parentId == request.auth.uid || resource.data.schoolId == getUserSchoolId()))
+        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (isParent() && resource.data.parentId == request.auth.uid)
       );
 
       // Create access:
       // - Parent can create feedback for their school
       // - Admin / Principal / Teacher can create
       allow create: if isAuthenticated() && isUserActive() && (
-        (isParent() && request.resource.data.parentId == request.auth.uid && request.resource.data.schoolId == getUserSchoolId()) ||
+        (isParent() &&
+          request.resource.data.parentId == request.auth.uid &&
+          request.resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
+          request.auth.uid in get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.parentIds
+        ) ||
         ((isAdmin() || isTeacher() || isPrincipal()) && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
       );
 
@@ -255,14 +245,12 @@ service cloud.firestore {
       // - Teacher, Principal, or Admin in same school can update (e.g. replyFromTeacher / reply)
       // - Parent can update their own feedback
       allow update: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isTeacher() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() && resource.data.parentId == request.auth.uid && resource.data.schoolId == getUserSchoolId())
+        ((isAdmin() || isTeacher() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
       );
 
       // Delete access:
       allow delete: if isAuthenticated() && isUserActive() && (
-        (isAdmin() && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() && resource.data.parentId == request.auth.uid)
+        (isAdmin() && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
       );
     }
 
