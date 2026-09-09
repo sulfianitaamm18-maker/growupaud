@@ -6,7 +6,8 @@ export type UserRole =
   | 'PRINCIPAL'
   | 'KEPALA_SEKOLAH'
   | 'PARENT'
-  | 'ORANG_TUA';
+  | 'ORANG_TUA'
+  | 'OPERATOR';
 
 export interface SchoolProfile {
   id: string;
@@ -349,11 +350,16 @@ export interface ObservationRecord {
   };
   aiAnalysis?: AIInsightResult;
   academicYear?: string;
+  academicYearId?: string;
+  enrollmentId?: string;
   semester?: string;
+  semesterNumber?: 1 | 2;
   status: 'DRAFT' | 'VERIFIED' | 'REPORT_READY';
   createdAt?: string;
   updatedAt?: string;
 }
+
+export type StudentStatus = 'ACTIVE' | 'PROMOTED' | 'GRADUATED' | 'TRANSFERRED' | 'INACTIVE';
 
 export interface StudentProfile {
   id: string;
@@ -369,9 +375,15 @@ export interface StudentProfile {
   ageLabel?: string | null; // label terformat misal "5 tahun 3 bulan"
   gender: 'L' | 'P';
   className: string;
+  classGroup?: string;
   parentName: string;
   parentContact: string;
   avatar: string;
+  status?: StudentStatus;
+  currentEnrollmentId?: string;
+  completionReason?: string;
+  completionDate?: string;
+  archivedAt?: string;
   attendanceRate: number;
   overallScore: number | null;
   aspectScores: Record<DevelopmentalAspect, number | null>;
@@ -570,3 +582,158 @@ export interface PedagogicalRecommendation {
   assessmentIndicators: AssessmentIndicatorBundle[];
   followUpRecommendation: FollowUpRecommendationBundle;
 }
+
+// =========================================================================
+// SIKLUS DATA PESERTA DIDIK (ACADEMIC LIFECYCLE & ENROLLMENTS)
+// =========================================================================
+
+export type AcademicYearStatus = 'PLANNED' | 'ACTIVE' | 'CLOSED';
+export type SemesterNumber = 1 | 2;
+
+export interface AcademicYear {
+  id: string;
+  schoolId: string;
+  name: string; // e.g. "2026/2027"
+  status: AcademicYearStatus;
+  activeSemester: SemesterNumber;
+  startDate: string; // YYYY-MM-DD
+  endDate: string; // YYYY-MM-DD
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type EnrollmentEntryType = 'NEW' | 'PROMOTED' | 'TRANSFER_IN' | 'REPEAT';
+export type EnrollmentStatus = 'ACTIVE' | 'PROMOTED' | 'GRADUATED' | 'TRANSFERRED' | 'WITHDRAWN';
+
+export interface Enrollment {
+  id: string;
+  schoolId: string;
+  studentId: string;
+  studentName?: string;
+  academicYearId: string;
+  academicYearName?: string;
+  classId: string;
+  className?: string;
+  teacherIds: string[];
+  parentIds: string[];
+  entryType: EnrollmentEntryType;
+  status: EnrollmentStatus;
+  startDate: string;
+  endDate?: string;
+  previousClassId?: string;
+  previousClassName?: string;
+  nextClassId?: string;
+  nextClassName?: string;
+  completionReason?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export type SemesterReportStatus = 'DRAFT' | 'REVIEW' | 'FINAL';
+
+export interface SemesterAspectAssessment {
+  aspect: DevelopmentalAspect;
+  aspectName: string;
+  scorePercentage: number;
+  ratingLevel: RatingLevel;
+  observationsCount: number;
+  evidenceCount: number;
+  strengths: string[];
+  needsDevelopment: string[];
+  teacherNotes: string;
+}
+
+export interface SemesterReport {
+  id: string; // usually `rep-sem-${studentId}-${academicYearId}-${semester}`
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  studentNickname?: string;
+  enrollmentId: string;
+  academicYearId: string;
+  academicYearName: string;
+  semester: SemesterNumber;
+  classId: string;
+  className: string;
+  teacherId?: string;
+  teacherName?: string;
+  status: SemesterReportStatus;
+  totalObservations: number;
+  aspects: Record<DevelopmentalAspect, SemesterAspectAssessment>;
+  generalStrengths: string[];
+  areasToDevelop: string[];
+  overallTeacherNote: string;
+  recommendations: string[];
+  homeStimulationAdvice: string[];
+  finalizedAt?: string;
+  finalizedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+  snapshotData?: any; // Immutable copy when FINAL
+}
+
+export type AnnualReportDecision = 'PROMOTED' | 'GRADUATED' | 'REPEAT' | 'TRANSFERRED';
+
+export interface AnnualReport {
+  id: string; // usually `rep-ann-${studentId}-${academicYearId}`
+  schoolId: string;
+  studentId: string;
+  studentName: string;
+  studentNickname?: string;
+  enrollmentId: string;
+  academicYearId: string;
+  academicYearName: string;
+  classId: string;
+  className: string;
+  teacherId?: string;
+  teacherName?: string;
+  semester1ReportId?: string;
+  semester2ReportId?: string;
+  semester1Summary?: {
+    totalObservations: number;
+    aspectAverages: Record<DevelopmentalAspect, number>;
+  };
+  semester2Summary?: {
+    totalObservations: number;
+    aspectAverages: Record<DevelopmentalAspect, number>;
+  };
+  annualProgressOverview: string;
+  strengths: string[];
+  recommendations: string[];
+  finalDecision: AnnualReportDecision;
+  decisionNotes?: string;
+  targetNextClassId?: string;
+  targetNextClassName?: string;
+  isFinal: boolean;
+  finalizedAt?: string;
+  finalizedBy?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface AuditLog {
+  id: string;
+  schoolId: string;
+  actorUserId: string;
+  actorRole: UserRole | string;
+  actorName?: string;
+  action:
+    | 'CREATE_ACADEMIC_YEAR'
+    | 'ACTIVATE_ACADEMIC_YEAR'
+    | 'SWITCH_SEMESTER'
+    | 'CLOSE_ACADEMIC_YEAR'
+    | 'ENROLL_STUDENT'
+    | 'PROMOTE_STUDENT'
+    | 'REPEAT_STUDENT'
+    | 'GRADUATE_STUDENT'
+    | 'TRANSFER_STUDENT'
+    | 'FINALIZE_SEMESTER_REPORT'
+    | 'FINALIZE_ANNUAL_REPORT'
+    | 'ARCHIVE_STUDENT';
+  targetType: 'ACADEMIC_YEAR' | 'ENROLLMENT' | 'STUDENT' | 'SEMESTER_REPORT' | 'ANNUAL_REPORT';
+  targetId: string;
+  targetName?: string;
+  timestamp: string;
+  metadata?: Record<string, any>;
+}
+

@@ -382,6 +382,7 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
     try {
       const prevObs = observationStore.getObservationsByStudent(selectedStudent.id);
       const result = await generateAIAssessmentInsight({
+        studentId: selectedStudent.id,
         studentName: selectedStudent.name,
         studentAge: formatStudentAge(selectedStudent),
         ageYears: selectedStudent.ageYears,

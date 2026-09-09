@@ -9,11 +9,58 @@ export const classService = {
   /**
    * Fetch classes from Firestore `classes` collection
    */
-  async getClasses(schoolId: string = SCHOOL_DOC_ID): Promise<ClassRoom[]> {
+  async getClasses(
+    schoolId: string = SCHOOL_DOC_ID,
+    userRole?: string,
+    teacherUid?: string
+  ): Promise<ClassRoom[]> {
     if (!auth.currentUser) return [];
+
+    const currentUid = teacherUid || auth.currentUser.uid;
+    const normalizedRole = (userRole || '').toUpperCase();
+    const isTeacher = normalizedRole === 'TEACHER' || normalizedRole === 'GURU';
 
     try {
       const classesRef = collection(db, 'classes');
+
+      if (isTeacher) {
+        // Strict Teacher Query: Hanya ambil kelas yang ditugaskan kepada guru ini
+        const classesMap = new Map<string, ClassRoom>();
+
+        // Query 1: where teacherId == currentUid
+        try {
+          const qTeacher = query(
+            classesRef,
+            where('schoolId', '==', schoolId),
+            where('teacherId', '==', currentUid)
+          );
+          const snapTeacher = await getDocs(qTeacher);
+          snapTeacher.docs.forEach((d) => {
+            classesMap.set(d.id, { id: d.id, ...d.data() } as ClassRoom);
+          });
+        } catch (err) {
+          console.warn('Teacher getClasses by teacherId notice:', err);
+        }
+
+        // Query 2: where teacherIds array contains currentUid
+        try {
+          const qTeacherIds = query(
+            classesRef,
+            where('schoolId', '==', schoolId),
+            where('teacherIds', 'array-contains', currentUid)
+          );
+          const snapTeacherIds = await getDocs(qTeacherIds);
+          snapTeacherIds.docs.forEach((d) => {
+            classesMap.set(d.id, { id: d.id, ...d.data() } as ClassRoom);
+          });
+        } catch (err) {
+          // ignore
+        }
+
+        return Array.from(classesMap.values());
+      }
+
+      // Administrative roles (Admin, Principal, Operator, SuperAdmin)
       const q = query(classesRef, where('schoolId', '==', schoolId));
       const querySnap = await getDocs(q);
 

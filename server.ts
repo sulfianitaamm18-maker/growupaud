@@ -12,14 +12,79 @@ dotenv.config();
 
 let adminApp: App | null = null;
 let genAIClient: GoogleGenAI | null = null;
+let isGeminiOperational: boolean | null = null;
+let lastKeyTested = '';
+
+async function verifyGeminiOperational(): Promise<boolean> {
+  const rawKey = process.env.GEMINI_API_KEY;
+  if (!rawKey) {
+    isGeminiOperational = false;
+    genAIClient = null;
+    return false;
+  }
+  const cleanKey = rawKey.trim().replace(/^["']|["']$/g, '');
+  if (
+    !cleanKey ||
+    cleanKey === 'MY_GEMINI_API_KEY' ||
+    cleanKey.startsWith('{') ||
+    cleanKey.length < 10
+  ) {
+    isGeminiOperational = false;
+    genAIClient = null;
+    return false;
+  }
+
+  if (isGeminiOperational !== null && lastKeyTested === cleanKey) {
+    return isGeminiOperational;
+  }
+
+  lastKeyTested = cleanKey;
+
+  try {
+    const candidateClient = new GoogleGenAI({
+      apiKey: cleanKey,
+      httpOptions: {
+        headers: {
+          'User-Agent': 'aistudio-build',
+        },
+      },
+    });
+
+    // Test with a lightweight 1-token probe request to verify authorization
+    await candidateClient.models.generateContent({
+      model: 'gemini-3.8-flash',
+      contents: 'ping',
+      config: {
+        maxOutputTokens: 1,
+      },
+    });
+
+    genAIClient = candidateClient;
+    isGeminiOperational = true;
+    console.log('[SERVER] Gemini API verified and operational.');
+    return true;
+  } catch {
+    genAIClient = null;
+    isGeminiOperational = false;
+    console.log(
+      '[SERVER] Gemini API live connection inactive; standard Kurikulum Merdeka pedagogical engine engaged.'
+    );
+    return false;
+  }
+}
 
 function getGenAI(): GoogleGenAI | null {
-  if (!genAIClient) {
-    const key = process.env.GEMINI_API_KEY;
-    if (key && key.trim() !== '' && key !== 'MY_GEMINI_API_KEY') {
-      genAIClient = new GoogleGenAI({ apiKey: key.trim() });
-    }
+  const rawKey = process.env.GEMINI_API_KEY;
+  const cleanKey = (rawKey || '').trim().replace(/^["']|["']$/g, '');
+
+  if (cleanKey && cleanKey !== lastKeyTested) {
+    verifyGeminiOperational().catch(() => {});
   }
+
+  if (isGeminiOperational === false) {
+    return null;
+  }
+
   return genAIClient;
 }
 
@@ -158,6 +223,14 @@ async function startServer() {
         (caller.profile.className && student.className && caller.profile.className === student.className);
       if (!assigned && !classMatch) {
         throw { status: 403, error: 'FORBIDDEN', message: 'Guru hanya dapat menganalisis anak yang menjadi tanggung jawabnya.' };
+      }
+    }
+    if (caller.role === 'PARENT' || caller.role === 'ORANG_TUA') {
+      const parentId = caller.uid;
+      const isParent = (Array.isArray(student.parentIds) && student.parentIds.includes(parentId)) ||
+        (student.parentId && student.parentId === parentId);
+      if (!isParent) {
+        throw { status: 403, error: 'FORBIDDEN', message: 'Akses terhadap data anak ditolak: Bukan orang tua siswa yang bersangkutan.' };
       }
     }
     return student;
@@ -736,8 +809,10 @@ KEMBALIKAN HANYA JSON DENGAN FORMAT BERIKUT:
           const text = response.text || '{}';
           const parsed = JSON.parse(text);
           return res.json({ success: true, data: parsed, source: 'gemini' });
-        } catch (apiErr: any) {
-          console.warn('[SERVER] Gemini API lesson plan failed, using pedagogic fallback:', apiErr?.message);
+        } catch {
+          isGeminiOperational = false;
+          genAIClient = null;
+          console.log('[SERVER] Gemini API lesson plan using pedagogic engine fallback.');
         }
       }
 
@@ -831,7 +906,12 @@ KEMBALIKAN HANYA JSON DENGAN FORMAT BERIKUT:
       return res.json({ success: true, data: fallbackData, source: 'fallback' });
     } catch (error: any) {
       console.error('[SERVER] lesson-plan-recommendation error:', error);
-      return res.status(500).json({ success: false, message: 'Gagal memproses rekomendasi pembelajaran.' });
+      const status = error.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: error.error || 'SERVER_ERROR',
+        message: error.message || 'Gagal memproses rekomendasi pembelajaran.',
+      });
     }
   });
 
@@ -910,8 +990,10 @@ KEMBALIKAN HANYA JSON DENGAN STRUKTUR BERIKUT:
           const text = response.text || '{}';
           const parsed = JSON.parse(text);
           return res.json({ success: true, data: parsed, source: 'gemini' });
-        } catch (apiErr: any) {
-          console.warn('[SERVER] Gemini API observation analysis failed, using pedagogic fallback:', apiErr?.message);
+        } catch {
+          isGeminiOperational = false;
+          genAIClient = null;
+          console.log('[SERVER] Gemini API observation analysis using pedagogic engine fallback.');
         }
       }
 
@@ -937,7 +1019,12 @@ KEMBALIKAN HANYA JSON DENGAN STRUKTUR BERIKUT:
       return res.json({ success: true, data: fallbackAnalysis, source: 'fallback' });
     } catch (error: any) {
       console.error('[SERVER] analyze-observation error:', error);
-      return res.status(500).json({ success: false, message: 'Gagal menganalisis observasi.' });
+      const status = error.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: error.error || 'SERVER_ERROR',
+        message: error.message || 'Gagal menganalisis observasi.',
+      });
     }
   });
 
@@ -1010,8 +1097,10 @@ KEMBALIKAN HANYA JSON:
           const text = response.text || '{}';
           const parsed = JSON.parse(text);
           return res.json({ success: true, data: parsed, source: 'gemini' });
-        } catch (apiErr: any) {
-          console.warn('[SERVER] Gemini photo analysis failed, using fallback:', apiErr?.message);
+        } catch {
+          isGeminiOperational = false;
+          genAIClient = null;
+          console.log('[SERVER] Gemini photo analysis using pedagogic engine fallback.');
         }
       }
 
@@ -1028,24 +1117,26 @@ KEMBALIKAN HANYA JSON:
       return res.json({ success: true, data: fallbackResult, source: 'safe-fallback' });
     } catch (error: any) {
       console.error('[SERVER] analyze-photo error:', error);
-      return res.status(500).json({ success: false, message: 'Gagal menganalisis foto kegiatan.' });
+      const status = error.status || 500;
+      return res.status(status).json({
+        success: false,
+        error: error.error || 'SERVER_ERROR',
+        message: error.message || 'Gagal menganalisis foto kegiatan.',
+      });
     }
   });
+
+  verifyGeminiOperational().catch(() => {});
 
   const httpServer = http.createServer(app);
 
   // Vite middleware for dev or static serving for prod
   if (process.env.NODE_ENV !== 'production') {
-    const isHmrDisabled = process.env.DISABLE_HMR === 'true';
     const vite = await createViteServer({
       server: {
         middlewareMode: true,
-        hmr: isHmrDisabled
-          ? false
-          : {
-              server: httpServer,
-            },
-        watch: isHmrDisabled ? null : undefined,
+        hmr: false,
+        watch: null,
       },
       appType: 'spa',
     });

@@ -30,6 +30,7 @@ class SchoolStoreService {
   private cachedParents: ParentProfile[] = [];
   private isInitialized = false;
   private isFetching = false;
+  private activeSyncPromise: Promise<void> | null = null;
   private fetchError: string | null = null;
 
   constructor() {
@@ -58,6 +59,7 @@ class SchoolStoreService {
     this.cachedParents = [];
     this.isInitialized = false;
     this.isFetching = false;
+    this.activeSyncPromise = null;
     this.fetchError = null;
     this.notifyListeners();
   }
@@ -76,59 +78,72 @@ class SchoolStoreService {
       return;
     }
 
+    if (this.activeSyncPromise) {
+      return this.activeSyncPromise;
+    }
+
     this.isFetching = true;
     this.fetchError = null;
-    try {
-      console.log('[SCHOOL SYNC]\nSTART');
-      const [school, classes, students] = await Promise.all([
-        schoolService.getSchoolProfile(schoolId),
-        classService.getClasses(schoolId),
-        studentService.getStudents(schoolId, userRole, parentStudentIds),
-      ]);
 
-      if (school) {
-        this.cachedSchool = school;
-        console.log('[SCHOOL DATA]\nSUCCESS');
-      } else {
-        console.log('[SCHOOL DATA]\nDEFAULT');
-      }
+    this.activeSyncPromise = (async () => {
+      try {
+        console.log('[SCHOOL SYNC]\nSTART');
 
-      this.cachedClasses = classes || [];
-      console.log('[CLASSES]\nSUCCESS');
+        const effectiveRole =
+          userRole ||
+          (auth.currentUser ? userStore.getCachedProfile(auth.currentUser.uid)?.role : undefined);
 
-      this.cachedStudents = students || [];
-      console.log('[STUDENTS]\nSUCCESS');
+        const schoolPromise = schoolService.getSchoolProfile(schoolId);
+        const classes = await classService.getClasses(schoolId, effectiveRole);
+        const [school, students] = await Promise.all([
+          schoolPromise,
+          studentService.getStudents(schoolId, effectiveRole, parentStudentIds, classes),
+        ]);
 
-      // Determine if current user has permission to read the users collection
-      const effectiveRole =
-        userRole ||
-        (auth.currentUser ? userStore.getCachedProfile(auth.currentUser.uid)?.role : undefined);
-
-      const canQueryUsers =
-        effectiveRole === 'ADMIN' ||
-        effectiveRole === 'SUPER_ADMIN' ||
-        effectiveRole === 'PRINCIPAL';
-
-      if (canQueryUsers) {
-        try {
-          const users = await userStore.getAllUserProfiles(schoolId);
-          if (users && users.length > 0) {
-            this.syncTeachersAndParentsFromUsers(users);
-          }
-        } catch (uErr) {
-          // Ignored if user not authorized
+        if (school) {
+          this.cachedSchool = school;
+          console.log('[SCHOOL DATA]\nSUCCESS');
+        } else {
+          console.log('[SCHOOL DATA]\nDEFAULT');
         }
-      }
 
-      this.isInitialized = true;
-      this.notifyListeners();
-    } catch (err: any) {
-      this.fetchError = err.message || 'Gagal terhubung ke Firestore.';
-      console.warn('SchoolStore Firestore sync warning:', err);
-      console.log('[SCHOOL SYNC]\nERROR: ' + err.message);
-    } finally {
-      this.isFetching = false;
-    }
+        this.cachedClasses = classes || [];
+        console.log('[CLASSES]\nSUCCESS');
+
+        this.cachedStudents = students || [];
+        console.log('[STUDENTS]\nSUCCESS');
+
+        // Determine if current user has permission to read the users collection
+        const canQueryUsers =
+          effectiveRole === 'ADMIN' ||
+          effectiveRole === 'SUPER_ADMIN' ||
+          effectiveRole === 'OPERATOR' ||
+          effectiveRole === 'PRINCIPAL';
+
+        if (canQueryUsers) {
+          try {
+            const users = await userStore.getAllUserProfiles(schoolId);
+            if (users && users.length > 0) {
+              this.syncTeachersAndParentsFromUsers(users);
+            }
+          } catch (uErr) {
+            // Ignored if user not authorized
+          }
+        }
+
+        this.isInitialized = true;
+        this.notifyListeners();
+      } catch (err: any) {
+        this.fetchError = err.message || 'Gagal terhubung ke Firestore.';
+        console.warn('SchoolStore Firestore sync warning:', err);
+        console.log('[SCHOOL SYNC]\nERROR: ' + err.message);
+      } finally {
+        this.isFetching = false;
+        this.activeSyncPromise = null;
+      }
+    })();
+
+    return this.activeSyncPromise;
   }
 
   public syncTeachersAndParentsFromUsers(users: UserProfile[], notify: boolean = false): void {

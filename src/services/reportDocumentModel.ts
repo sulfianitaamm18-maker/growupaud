@@ -378,15 +378,16 @@ export function buildCanonicalReportDocument(
         : predicate.conditionLabel;
 
     // Synthesize real behavior description if indicators exist
-    let whatIsObserved = defaultAspectInsights[key].observed;
-    let whatNeedsStrengthening = defaultAspectInsights[key].strengthen;
+    let whatIsObserved = 'Belum tersedia cukup data asesmen terukur.';
+    let whatNeedsStrengthening = 'Pengamatan guru akan terus dilengkapi seiring proses bermain di sekolah.';
 
     if (data.indicators.length > 0) {
       const topInds = data.indicators.map((i) => i.text);
       if (topInds.length > 0) {
-        whatIsObserved = `Tampak aktif saat ${topInds[0].toLowerCase()}${
+        whatIsObserved = `Tampak berproses saat ${topInds[0].toLowerCase()}${
           topInds.length > 1 ? ` serta ${topInds[1].toLowerCase()}` : ''
         }.`;
+        whatNeedsStrengthening = `Kemampuan pada aspek ini terus dikuatkan melalui pembiasaan bermain bermakna.`;
       }
     }
 
@@ -453,11 +454,15 @@ export function buildCanonicalReportDocument(
   };
 
   // 5. Overall Synthesis Narrative (Max 60 - 85 Words, Warm & Insightful)
-  const defaultSummary = `Ananda ${studentNick} menunjukkan tumbuh kembang yang sangat menggembirakan di kelas ${className}. Ananda aktif berpartisipasi, mandiri merapikan alat bermain, dan mampu berinteraksi akrab dengan guru maupun teman. Kemampuan eksplorasi serta motorik ananda terus berkembang positif. Selanjutnya, ananda terus didampingi untuk memperkuat kepercayaan diri dalam menyampaikan ide dan mempertahankan fokus kegiatan.`;
-  const summaryNarrative = trimToWordCount(
-    student?.timeline?.[0]?.description || defaultSummary,
-    80
-  );
+  let summaryNarrative = '';
+  if (totalCount > 0 && overallPercentage !== null) {
+    summaryNarrative = `Ananda ${studentNick} menunjukkan proses belajar dan bermain yang aktif di kelas ${className}. Berdasarkan pengamatan terukur pada periode ini, capaian perkembangan ananda tercatat ${overallPercentage}% dengan kekuatan utama pada aspek ${topAspect.aspectTitle}. Stimulasi terarah terus diberikan guru dan orang tua untuk menguatkan aspek yang sedang berkembang.`;
+  } else if (student?.timeline?.[0]?.description) {
+    summaryNarrative = student.timeline[0].description;
+  } else {
+    summaryNarrative = `Laporan perkembangan Ananda ${studentNick} pada periode ini sedang dalam tahap pengumpulan data observasi autentik kelas. Belum tersedia cukup data asesmen terukur untuk menyimpulkan capaian keseluruhan. Catatan dan dokumentasi akan terus diperbarui oleh guru.`;
+  }
+  summaryNarrative = trimToWordCount(summaryNarrative, 80);
 
   // 6. Legenda Kamus Tingkat Capaian (Sederhana & Mudah Dipahami Orang Tua)
   const rubricGuide = [
@@ -528,29 +533,13 @@ export function buildCanonicalReportDocument(
     });
   }
   if (developedPoints.length === 0) {
-    developedPoints.push(
-      {
-        aspect: 'Jati Diri',
-        title: 'Kemandirian & Tanggung Jawab',
-        behavior: 'Mulai mampu merapikan alat bermain sendiri setelah selesai digunakan.',
-        activityContext: 'Rutinitas Kelas',
-        date: todayFormatted,
-      },
-      {
-        aspect: 'Sosial Emosional',
-        title: 'Kerjasama & Berbagi',
-        behavior: 'Mau berbagi alat mewarnai dan bermain bersama teman dengan hangat.',
-        activityContext: 'Bermain Kelompok',
-        date: todayFormatted,
-      },
-      {
-        aspect: 'Kognitif',
-        title: 'Mengenali Bentuk & Warna',
-        behavior: 'Mampu mengenali dan mengelompokkan beberapa benda berdasarkan cirinya.',
-        activityContext: 'Sentra Balok & Eksplorasi',
-        date: todayFormatted,
-      }
-    );
+    developedPoints.push({
+      aspect: 'Status Asesmen',
+      title: 'Data Asesmen Terukur',
+      behavior: 'Belum tersedia cukup data asesmen terukur untuk memetakan capaian ananda pada periode ini.',
+      activityContext: 'Pengamatan Berjalan',
+      date: todayFormatted,
+    });
   }
 
   // 9. Structured "Masih Perlu Dikembangkan" (Max 2 - 3 Poin Positif & Membangun)
@@ -565,50 +554,53 @@ export function buildCanonicalReportDocument(
     });
   }
   if (growthPoints.length === 0) {
-    growthPoints.push(
-      {
-        aspect: 'Bahasa & Kepercayaan Diri',
-        title: 'Keberanian Menyampaikan Pendapat',
-        recommendation: `Masih perlu dukungan dan dorongan lembut untuk menyampaikan jawaban secara lebih percaya diri.`,
-      },
-      {
-        aspect: 'Motorik & Ketekunan',
-        title: 'Fokus Menyelesaikan Kegiatan',
-        recommendation: `Kemampuan mempertahankan perhatian dan menuntaskan karya masih perlu dilatih secara bertahap.`,
-      },
-      {
-        aspect: 'Motorik Halus',
-        title: 'Koordinasi Jari Tangan',
-        recommendation: `Perlu lebih banyak stimulasi bermain yang melatih koordinasi tangan dan mata seperti meronce dan meremas adonan.`,
-      }
-    );
+    growthPoints.push({
+      aspect: 'Status Perkembangan',
+      title: 'Penguatan Terjadwal',
+      recommendation: 'Belum tersedia cukup data asesmen terukur. Pengamatan autentik guru akan terus diperbarui pada kegiatan bermain selanjutnya.',
+    });
   }
 
   // 10. Structured "Stimulasi Sederhana di Rumah" (Max 3 - 4 Aktivitas Konkret: Aktivitas → Kemampuan yang dilatih)
-  const homeStimulations: HomeStimulationItem[] = [
-    {
-      title: 'Bermain Mengelompokkan Benda di Rumah',
-      activity: 'Ajak ananda mengelompokkan sendok, mainan, atau pakaian berdasarkan warna, bentuk, atau ukurannya.',
-      skillTrained: 'Melatih kemampuan berpikir logis dan klasifikasi.',
-    },
-    {
-      title: 'Bercerita Bergantian Sebelum Tidur',
-      activity: 'Ajak ananda menceritakan kembali satu kegiatan paling berkesan hari ini dalam 2–3 kalimat sederhana.',
-      skillTrained: 'Melatih kemampuan bahasa ekspresif dan kepercayaan diri.',
-    },
-    {
-      title: 'Merapikan Bersama Menjadi Permainan',
-      activity: 'Tantang ananda mengembalikan 3 benda ke tempat semula secara mandiri sambil bernyanyi riang.',
-      skillTrained: 'Menumbuhkan kemandirian dan rasa tanggung jawab.',
-    },
-  ];
+  const homeStimulations: HomeStimulationItem[] = totalCount > 0
+    ? [
+        {
+          title: 'Bermain Mengelompokkan Benda di Rumah',
+          activity: 'Ajak ananda mengelompokkan sendok, mainan, atau pakaian berdasarkan warna, bentuk, atau ukurannya.',
+          skillTrained: 'Melatih kemampuan berpikir logis dan klasifikasi.',
+        },
+        {
+          title: 'Bercerita Bergantian Sebelum Tidur',
+          activity: 'Ajak ananda menceritakan kembali satu kegiatan paling berkesan hari ini dalam 2–3 kalimat sederhana.',
+          skillTrained: 'Melatih kemampuan bahasa ekspresif dan kepercayaan diri.',
+        },
+        {
+          title: 'Merapikan Bersama Menjadi Permainan Menyenangkan',
+          activity: 'Tantang ananda mengembalikan 3 benda ke tempat semula secara mandiri sambil bernyanyi riang.',
+          skillTrained: 'Menumbuhkan kemandirian dan rasa tanggung jawab.',
+        },
+      ]
+    : [
+        {
+          title: 'Komunikasi Hangat dan Membaca Bersama',
+          activity: 'Luangkan waktu 10-15 menit berbincang tentang kegiatan yang disukai ananda dan membaca buku cerita bergambar.',
+          skillTrained: 'Menumbuhkan kedekatan emosional dan literasi awal.',
+        },
+        {
+          title: 'Pembiasaan Kemandirian Ringan di Rumah',
+          activity: 'Ajak ananda mencoba memakai sepatu sendiri dan menaruh pakaian kotor ke tempatnya.',
+          skillTrained: 'Membangun rasa percaya diri dan kemandirian bertahap.',
+        },
+      ];
 
   // 11. Pesan Hangat Wali Kelas (Max 40 - 50 Kata)
   let rawTeacherMessage = '';
   if (teacherNotes.length > 0) {
     rawTeacherMessage = teacherNotes[0];
+  } else if (totalCount > 0) {
+    rawTeacherMessage = `Terima kasih kepada Ayah dan Bunda atas kerjasama yang baik dalam mendampingi tumbuh kembang Ananda ${studentNick}. Mari kita terus bersinergi mendukung ananda dengan stimulasi bermain yang menyenangkan di rumah.`;
   } else {
-    rawTeacherMessage = `Ananda ${studentNick} adalah pribadi yang ceria, sopan, dan bersemangat saat belajar. Terima kasih kepada Ayah dan Bunda atas pendampingan penuh kasih di rumah. Mari terus bersama mendukung tumbuh kembang bahagia ananda.`;
+    rawTeacherMessage = `Buku laporan perkembangan Ananda ${studentNick} memuat catatan proses belajar autentik di sekolah. Guru dan sekolah siap berkolaborasi bersama orang tua dalam memantau setiap langkah perkembangan ananda.`;
   }
   const teacherMessage = trimToWordCount(rawTeacherMessage, 50);
 

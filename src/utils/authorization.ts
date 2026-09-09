@@ -21,17 +21,18 @@ function normalizeName(str?: string): string {
 export function canViewStudent(user: UserProfile, student: StudentProfile): boolean {
   if (!user || !student) return false;
 
-  // 1. Isolasi multi-tenant antar sekolah
-  if (user.schoolId && student.schoolId && user.schoolId !== student.schoolId) {
+  const role = (user.role || '').toUpperCase();
+
+  // 1. Isolasi multi-tenant antar sekolah (SUPER_ADMIN memiliki akses audit platform lintas sekolah)
+  if (role !== 'SUPER_ADMIN' && user.schoolId && student.schoolId && user.schoolId !== student.schoolId) {
     return false;
   }
 
-  const role = (user.role || '').toUpperCase();
-
-  // 2. ADMIN & KEPALA SEKOLAH dapat melihat seluruh siswa di sekolahnya
+  // 2. ADMIN, OPERATOR & KEPALA SEKOLAH dapat melihat seluruh siswa di sekolahnya
   if (
     role === 'ADMIN' ||
     role === 'SUPER_ADMIN' ||
+    role === 'OPERATOR' ||
     role === 'PRINCIPAL' ||
     role === 'KEPALA_SEKOLAH'
   ) {
@@ -85,22 +86,25 @@ export function canViewStudent(user: UserProfile, student: StudentProfile): bool
       // ignore
     }
 
-    // e. Jika guru memiliki classId atau className yang telah ditentukan, tetapi siswa tidak cocok, tolak
-    if (user.classId || user.className) {
-      return false;
-    }
-
-    // f. Fallback untuk guru umum yang belum diplot ke kelas tertentu
-    return true;
+    // e. Jika siswa tidak cocok dengan penugasan kelas ataupun teacherIds, tolak akses secara ketat
+    return false;
   }
 
   // 4. ORANG TUA / PARENT: HANYA BOLEH melihat anaknya sendiri
+  // Sumber otoritatif tunggal adalah data siswa: students/{studentId}.parentIds
   if (role === 'ORANG_TUA' || role === 'PARENT') {
-    if (user.childId && user.childId === student.id) return true;
-    if (user.studentIds && user.studentIds.includes(student.id)) return true;
-    if ((user as any).linkedStudentIds && (user as any).linkedStudentIds.includes(student.id)) return true;
-    if ((user as any).parentStudentIds && (user as any).parentStudentIds.includes(student.id)) return true;
-    if (student.parentIds && student.parentIds.includes(user.id)) return true;
+    const parentUid = user.id;
+    if (!parentUid) return false;
+
+    // OTORITATIF: Hanya percaya atribut pada objek student (student.parentIds atau legacy student.parentId)
+    // Field pada userProfile (studentIds, childId, linkedStudentIds, parentStudentIds)
+    // TIDAK BOLEH dijadikan penentu otorisasi
+    if (student.parentIds && Array.isArray(student.parentIds) && student.parentIds.includes(parentUid)) {
+      return true;
+    }
+    if ((student as any).parentId && (student as any).parentId === parentUid) {
+      return true;
+    }
     return false;
   }
 
@@ -110,7 +114,7 @@ export function canViewStudent(user: UserProfile, student: StudentProfile): bool
 export function canEditStudent(user: UserProfile, _student: StudentProfile): boolean {
   if (!user) return false;
   const role = (user.role || '').toUpperCase();
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  return role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR';
 }
 
 export function canViewObservation(
@@ -130,6 +134,7 @@ export function canViewObservation(
   if (
     role === 'ADMIN' ||
     role === 'SUPER_ADMIN' ||
+    role === 'OPERATOR' ||
     role === 'PRINCIPAL' ||
     role === 'KEPALA_SEKOLAH'
   ) {
@@ -152,7 +157,13 @@ export function canViewObservation(
     ) {
       return true;
     }
-    return !user.schoolId || !observation.schoolId || user.schoolId === observation.schoolId;
+    if (user.classId && observation.classId && user.classId === observation.classId) {
+      return true;
+    }
+    if (user.className && observation.className && normalizeName(user.className) === normalizeName(observation.className)) {
+      return true;
+    }
+    return false;
   }
 
   if (role === 'ORANG_TUA' || role === 'PARENT') {
@@ -160,12 +171,7 @@ export function canViewObservation(
     if (student) {
       return canViewStudent(user, student);
     }
-    return (
-      user.childId === observation.studentId ||
-      (user.studentIds?.includes(observation.studentId) ?? false) ||
-      ((user as any).linkedStudentIds?.includes(observation.studentId) ?? false) ||
-      ((user as any).parentStudentIds?.includes(observation.studentId) ?? false)
-    );
+    return false;
   }
 
   return false;
@@ -180,13 +186,16 @@ export function canEditObservation(
 
   const role = (user.role || '').toUpperCase();
 
-  // ADMIN & SUPER_ADMIN dapat mengedit observasi seluruh sekolah
-  if (role === 'ADMIN' || role === 'SUPER_ADMIN') {
+  // ADMIN, SUPER_ADMIN & OPERATOR dapat mengedit observasi seluruh sekolah
+  if (role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR') {
     return true;
   }
 
-  // GURU hanya boleh mengedit observasi siswa jika siswa berada di kelas yang menjadi tanggung jawabnya
+  // GURU hanya boleh mengedit observasi miliknya sendiri yang ditugaskan kepadanya
   if (role === 'GURU' || role === 'TEACHER') {
+    if (observation.teacherId && observation.teacherId !== user.id) {
+      return false;
+    }
     const student = allStudents?.find((s) => s.id === observation.studentId);
     if (student) {
       return canViewStudent(user, student);
@@ -201,13 +210,13 @@ export function canEditObservation(
 export function canManageCurriculum(user: UserProfile): boolean {
   if (!user) return false;
   const role = (user.role || '').toUpperCase();
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  return role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR';
 }
 
 export function canManageSchool(user: UserProfile): boolean {
   if (!user) return false;
   const role = (user.role || '').toUpperCase();
-  return role === 'ADMIN' || role === 'SUPER_ADMIN';
+  return role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR';
 }
 
 export function canViewReport(
@@ -219,10 +228,11 @@ export function canViewReport(
 
   const role = (user.role || '').toUpperCase();
 
-  // ADMIN, SUPER_ADMIN & KEPALA SEKOLAH
+  // ADMIN, SUPER_ADMIN, OPERATOR & KEPALA SEKOLAH
   if (
     role === 'ADMIN' ||
     role === 'SUPER_ADMIN' ||
+    role === 'OPERATOR' ||
     role === 'PRINCIPAL' ||
     role === 'KEPALA_SEKOLAH'
   ) {
@@ -240,19 +250,44 @@ export function canViewReport(
   }
 
   // ORANG TUA HANYA BOLEH melihat laporan anaknya sendiri
+  // Sumber otoritatif tunggal: students/{studentId}.parentIds
   if (role === 'ORANG_TUA' || role === 'PARENT') {
     if (student) {
       return canViewStudent(user, student);
     }
-    if (allStudents && allStudents.length > 0 && !student) {
-      return false;
-    }
-    return (
-      user.childId === studentId ||
-      (user.studentIds?.includes(studentId) ?? false) ||
-      ((user as any).linkedStudentIds?.includes(studentId) ?? false)
-    );
+    return false;
   }
 
   return false;
+}
+
+// Aliases and Specific Security Rule Helpers
+export const canAccessStudent = canViewStudent;
+
+export function canInputObservations(user: UserProfile): boolean {
+  if (!user) return false;
+  const role = (user.role || '').toUpperCase();
+  return (
+    role === 'GURU' ||
+    role === 'TEACHER' ||
+    role === 'ADMIN' ||
+    role === 'SUPER_ADMIN' ||
+    role === 'OPERATOR' ||
+    role === 'PRINCIPAL' ||
+    role === 'KEPALA_SEKOLAH'
+  );
+}
+
+export function canManageSchoolData(user: UserProfile): boolean {
+  if (!user) return false;
+  const role = (user.role || '').toUpperCase();
+  return role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR';
+}
+
+export function validateSchoolAccess(user: UserProfile, targetSchoolId?: string): boolean {
+  if (!user) return false;
+  const role = (user.role || '').toUpperCase();
+  if (role === 'SUPER_ADMIN') return true;
+  if (!targetSchoolId || !user.schoolId) return true;
+  return user.schoolId === targetSchoolId;
 }

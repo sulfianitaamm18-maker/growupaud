@@ -95,30 +95,41 @@ function MainApp() {
     if (!isAuthenticated || !userProfile) return;
 
     const schoolId = userProfile.schoolId || activeSchool?.id || 'main-school';
-    const role = userProfile.role || currentUser.role;
-    const rawParentIds = [
-      ...(userProfile.parentStudentIds || []),
-      ...(userProfile.studentIds || []),
-      ...(userProfile.linkedStudentIds || []),
-      ...(userProfile.studentId ? [userProfile.studentId] : []),
-      ...(userProfile.childId ? [userProfile.childId] : []),
-    ];
-    const parentStudentIds = Array.from(new Set(rawParentIds.filter(Boolean)));
+    const role = (userProfile.role || currentUser.role || '').toUpperCase();
+    const isParent = role === 'PARENT' || role === 'ORANG_TUA';
 
-    schoolStore.refreshFromFirestore(schoolId, role, parentStudentIds);
-    observationStore.initForContext(schoolId, role, parentStudentIds);
+    schoolStore.refreshFromFirestore(schoolId, role);
+    observationStore.initForContext(schoolId, role);
 
-    // Subscribe to real-time parent feedbacks from Firestore (school-isolated)
-    const unsubFeedbacks = feedbackService.subscribeFeedbacks(
-      schoolId,
-      undefined,
-      (data) => {
-        setFeedbacks(data);
-      },
-      (err) => {
-        console.warn('Real-time feedbacks subscription warning:', err);
-      }
-    );
+    // Subscribe to real-time parent feedbacks from Firestore (hanya untuk role yang berhak dan membutuhkan)
+    let unsubFeedbacks = () => {};
+    if (isParent) {
+      unsubFeedbacks = feedbackService.subscribeFeedbacks(
+        schoolId,
+        undefined,
+        (data) => {
+          setFeedbacks(data);
+        },
+        () => {
+          setFeedbacks([]);
+        },
+        true,
+        role
+      );
+    } else if (['ADMIN', 'SUPER_ADMIN', 'OPERATOR', 'PRINCIPAL', 'KEPALA_SEKOLAH'].includes(role)) {
+      unsubFeedbacks = feedbackService.subscribeFeedbacks(
+        schoolId,
+        undefined,
+        (data) => {
+          setFeedbacks(data);
+        },
+        () => {
+          setFeedbacks([]);
+        },
+        false,
+        role
+      );
+    }
 
     console.log('[DASHBOARD]\nREADY');
 
@@ -126,7 +137,12 @@ function MainApp() {
       setObservations(observationStore.getObservations());
     });
     const unsubSchool = schoolStore.subscribe(() => {
-      setStudents(schoolStore.getStudents());
+      const currentStudents = schoolStore.getStudents();
+      setStudents(currentStudents);
+      if (isParent) {
+        const legitimateChildIds = currentStudents.map((s) => s.id);
+        observationStore.initForContext(schoolId, role, legitimateChildIds);
+      }
     });
 
     return () => {
@@ -134,7 +150,20 @@ function MainApp() {
       unsubObs();
       unsubSchool();
     };
-  }, [loading, isAuthenticated, userProfile, activeSchool?.id, currentUser.role]);
+  }, [loading, isAuthenticated, userProfile?.id, userProfile?.role, userProfile?.schoolId, activeSchool?.id, currentUser.role]);
+
+  // Session Isolation: Reset local states when user logs out or switches accounts
+  useEffect(() => {
+    if (!isAuthenticated || !userProfile) {
+      setObservations([]);
+      setFeedbacks([]);
+      setStudents([]);
+      setSelectedStudentForReport(null);
+      setSelectedStudentForObs(undefined);
+      setEditingObservation(null);
+      setSearchQuery('');
+    }
+  }, [isAuthenticated, userProfile?.id]);
 
   // Search filter state
   const [searchQuery, setSearchQuery] = useState<string>('');

@@ -1,4 +1,4 @@
-import React, { useState, useMemo } from 'react';
+import React, { useState, useMemo, useEffect } from 'react';
 import {
   Heart,
   Sparkles,
@@ -135,6 +135,16 @@ export const OrangTuaDashboard: React.FC<OrangTuaDashboardProps> = ({
   const [isSubmitted, setIsSubmitted] = useState<boolean>(false);
   const [messageFilter, setMessageFilter] = useState<'ALL' | 'WAITING' | 'REPLIED'>('ALL');
 
+  // Reset child-specific states whenever active child changes
+  useEffect(() => {
+    setCommentText('');
+    setCustomAvatar(null);
+    setActiveLightboxPhoto(null);
+    setIsSubmitted(false);
+    setDownloadSuccessMsg(null);
+    setPhotoSuccessMsg(null);
+  }, [selectedChildId]);
+
   // Handle local avatar update
   const handleAvatarUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -255,23 +265,24 @@ export const OrangTuaDashboard: React.FC<OrangTuaDashboardProps> = ({
     return childObservations.find((o) => o.aiAnalysis)?.aiAnalysis || null;
   }, [childObservations]);
 
-  // Meaningful, parent-friendly strengths
+  // Meaningful, parent-friendly strengths grounded in real assessment
   const childStrengths = useMemo(() => {
     if (latestAIAnalysis?.strengths && latestAIAnalysis.strengths.length > 0) {
       return latestAIAnalysis.strengths;
     }
-    const titles = childObservations.map((o) => o.activityTitle).filter(Boolean);
-    if (titles.length > 0) {
-      return [
-        `Menunjukkan antusiasme dan partisipasi aktif saat mengikuti kegiatan "${titles[0]}".`,
-        'Mampu berinteraksi dengan ramah dan menunjukkan rasa ingin tahu tinggi bersama guru dan teman di kelas.',
-        'Mulai terbiasa mengikuti aturan bermain bergantian dan mengekspresikan perasaannya dengan santun.',
-      ];
+    const realDevelopedInds: string[] = [];
+    childObservations.forEach((obs) => {
+      (obs.indicators || []).forEach((ind) => {
+        if ((ind.rating === 'BSB' || ind.rating === 'BSH') && ind.text) {
+          realDevelopedInds.push(`Menunjukkan capaian baik pada kemampuan ${ind.text.toLowerCase()} (Kegiatan: ${obs.activityTitle}).`);
+        }
+      });
+    });
+    if (realDevelopedInds.length > 0) {
+      return realDevelopedInds.slice(0, 3);
     }
     return [
-      'Ananda menunjukkan adaptasi sosial yang baik dan ceria saat berkegiatan di sekolah.',
-      'Memiliki rasa ingin tahu alami yang tinggi saat mengeksplorasi media dan alat permainan edukatif.',
-      'Menunjukkan kemauan belajar dan merespons bimbingan guru dengan positif.',
+      'Belum tersedia cukup data asesmen terukur untuk memetakan kekuatan capaian ananda. Data akan diperbarui seiring berlangsungnya kegiatan pengamatan autentik di kelas.',
     ];
   }, [latestAIAnalysis, childObservations]);
 
@@ -280,19 +291,25 @@ export const OrangTuaDashboard: React.FC<OrangTuaDashboardProps> = ({
     if (latestAIAnalysis?.homeStimulationAdvice && latestAIAnalysis.homeStimulationAdvice.length > 0) {
       return latestAIAnalysis.homeStimulationAdvice;
     }
+    if (totalRatedIndicators > 0) {
+      return [
+        'Ajak ananda berbincang santai tentang kegiatan bermain yang paling disukainya hari ini untuk melatih komunikasi dua arah.',
+        'Berikan kesempatan ananda merapikan alat bermain sendiri ke tempat semula untuk melatih pembiasaan kemandirian bertahap.',
+        'Bacakan buku cerita bergambar 10-15 menit sebelum tidur untuk memperkaya perbendaharaan kata dan imajinasi ananda.',
+      ];
+    }
     return [
-      'Bermain "Detektif Bentuk & Warna": Ajak Ananda menemukan 3 benda bulat dan 3 benda persegi di sekitar rumah untuk melatih daya amati dan konsep bentuk.',
-      'Membaca Buku Cerita Bersama: Luangkan waktu 10-15 menit sebelum tidur untuk membaca dongeng bergambar, lalu ajak Ananda menceritakan kembali bagian yang paling disukainya.',
-      'Membiasakan Kemandirian Ringan: Berikan kesempatan pada Ananda merapikan mainan sendiri ke wadahnya dan menyiapkan sepatu sebelum bepergian untuk menumbuhkan rasa percaya diri.',
-      'Eksplorasi Sensori Alami: Ajak Ananda mengamati tekstur daun di pekarangan atau mencampur air warna-warni saat bermain untuk merangsang penalaran sains awal.',
+      'Belum tersedia rekomendasi stimulasi spesifik berbasis data asesmen. Guru akan membagikan stimulasi yang terarah setelah rangkaian asesmen autentik terverifikasi.',
     ];
-  }, [latestAIAnalysis]);
+  }, [latestAIAnalysis, totalRatedIndicators]);
 
-  // 5. Filtered Parent Feedbacks (Child specific)
+  // 5. Filtered Parent Feedbacks (Child specific and parent isolated)
   const childFeedbacks = useMemo(() => {
     if (!student) return [];
-    return feedbacks.filter((fb) => fb.studentId === student.id);
-  }, [feedbacks, student]);
+    return feedbacks.filter(
+      (fb) => fb.studentId === student.id && (!fb.parentId || fb.parentId === currentUser.id)
+    );
+  }, [feedbacks, student, currentUser.id]);
 
   const filteredFeedbacks = useMemo(() => {
     if (messageFilter === 'WAITING') {

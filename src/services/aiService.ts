@@ -1,4 +1,3 @@
-import { GoogleGenAI } from '@google/genai';
 import {
   AIInsightResult,
   IndicatorItem,
@@ -19,8 +18,25 @@ import { ASPECT_LABELS } from '../data/initialData';
 import { formatStudentAge, getStudentAgeContext } from '../utils/ageUtils';
 import { buildPedagogicalRecommendation } from './pedagogicalRecommendationEngine';
 import { getCuratedActivitiesForTheme, ThematicCuratedActivity } from './thematicActivityCurator';
+import { auth } from '../lib/firebase';
+
+async function getAuthHeader(): Promise<Record<string, string>> {
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      return {
+        'Authorization': `Bearer ${token}`,
+        'Content-Type': 'application/json',
+      };
+    } catch {
+      // ignore
+    }
+  }
+  return { 'Content-Type': 'application/json' };
+}
 
 interface AnalyzeObservationParams {
+  studentId?: string;
   studentName: string;
   studentAge?: string | null;
   ageYears?: number | null;
@@ -41,6 +57,7 @@ export async function generateAIAssessmentInsight(
   params: AnalyzeObservationParams
 ): Promise<AIInsightResult> {
   const {
+    studentId,
     studentName,
     studentAge,
     ageYears,
@@ -91,20 +108,14 @@ export async function generateAIAssessmentInsight(
     (i) => i.rating && i.rating !== 'BELUM_DINILAI'
   );
 
-  const historyContext = previousObservations.length > 0
-    ? previousObservations.map(o => `- Tanggal ${o.date}: Kegiatan "${o.activityTitle}" (${o.indicators.filter(i=>i.rating && i.rating !== 'BELUM_DINILAI').length} indikator dinilai)`).join('\n')
-    : 'Belum ada riwayat observasi sebelumnya untuk anak ini.';
-
-  const evidenceContext = evidences.length > 0
-    ? evidences.map((e, idx) => `Bukti ${idx + 1} (${e.type}): "${e.title}"${e.caption ? ` - ${e.caption}` : ''}`).join('\n')
-    : 'Belum ada file bukti visual/dokumen khusus yang dilampirkan.';
-
   try {
-    // 1. Call server-side API proxy first (keeps API key secure)
+    // 1. All AI requests must route through authenticated server-side endpoint with Firebase ID token
+    const authHeaders = await getAuthHeader();
     const serverRes = await fetch('/api/ai/analyze-observation', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify({
+        studentId,
         studentName,
         studentAge: ageContext.isAgeFilled ? ageContext.ageDisplay : studentAge,
         activityTitle,
@@ -124,10 +135,10 @@ export async function generateAIAssessmentInsight(
         return {
           overview: d.overview || `Analisis asesmen perkembangan Ananda ${studentName}`,
           aspectScores: realAspectScores,
-          strengths: Array.isArray(d.strengths) ? d.strengths : ['Menunjukkan antusiasme eksplorasi yang baik'],
-          needsStimulation: Array.isArray(d.needsStimulation) ? d.needsStimulation : ['Penguatan stimulasi bertahap pada aktivitas mandiri'],
+          strengths: Array.isArray(d.strengths) && d.strengths.length > 0 ? d.strengths : ['Belum ada capaian terukur yang menonjol pada kegiatan ini.'],
+          needsStimulation: Array.isArray(d.needsStimulation) && d.needsStimulation.length > 0 ? d.needsStimulation : ['Stimulasi lanjutan akan disesuaikan dengan kebutuhan bermain ananda.'],
           generatedNarrative: d.generatedNarrative || '',
-          homeStimulationAdvice: Array.isArray(d.homeStimulationAdvice) ? d.homeStimulationAdvice : [d.homeStimulationAdvice || 'Ajak anak bercerita mengenai kegiatannya.'],
+          homeStimulationAdvice: Array.isArray(d.homeStimulationAdvice) && d.homeStimulationAdvice.length > 0 ? d.homeStimulationAdvice : ['Dampingi ananda dalam bermain harian di rumah dengan penuh perhatian.'],
           confidenceScore: confidenceInfo.score,
           confidenceLevel: confidenceInfo.level,
           confidenceFactors: confidenceInfo.factors,
@@ -150,132 +161,12 @@ export async function generateAIAssessmentInsight(
       }
     }
   } catch (serverErr) {
-    console.warn('[AI Service] Server endpoint failed, attempting direct or fallback:', serverErr);
-  }
-
-  try {
-    const env = (import.meta as any).env || {};
-    const apiKey = env.VITE_GEMINI_API_KEY || env.GEMINI_API_KEY;
-    if (apiKey && apiKey !== 'MY_GEMINI_API_KEY') {
-      const ai = new GoogleGenAI({ apiKey });
-      const prompt = `
-Kamu adalah sistem AI Assessment Intelligence (GAI) untuk platform GrowUPAUD, spesialis asesmen anak usia dini (PAUD) berbasis Kurikulum Merdeka.
-Tugasmu: Lakukan ANALISIS TRIANGULASI 6 SUMBER DATA dan INTERPRETASI PERKEMBANGAN BERBASIS USIA untuk LAPORAN ORANG TUA.
-JANGAN HANYA MERINGKAS ATAU MENGGABUNGKAN TEKS. Lakukan triangulasi komprehensif antar seluruh sumber data.
-
-6 SUMBER DATA OBSERVASI:
-1. Konteks Data Anak & Umur:
-   - Nama Anak: Ananda ${studentName}
-   - Umur Anak: ${ageContext.isAgeFilled ? ageContext.ageDisplay : 'Umur belum dicantumkan'}
-   - Tahap Perkembangan Usia: ${ageContext.phaseName} (${ageContext.ageGroup})
-   - Karakteristik Pedagogis Usia: ${ageContext.pedagogicalContext}
-
-2. Konteks Kegiatan & Kurikulum:
-   - Kegiatan: ${activityTitle}
-   - Capaian Pembelajaran (CP): ${cp}
-   - Tujuan Pembelajaran (TP): ${tp}
-
-3. Rubrik Penilaian Indikator Guru:
-${indicators
-  .map(
-    (ind) =>
-      `- [${ind.aspect}] ${ind.text} -> Level: ${ind.rating || 'BELUM_DINILAI'}`
-  )
-  .join('\n')}
-
-4. Catatan Pengamatan Teks Guru:
-"${teacherNote || 'Tidak ada catatan teks'}"
-
-5. Transkrip Voice Note Guru:
-"${voiceNoteText || 'Tidak ada rekaman suara'}"
-
-6. Bukti Fisik/Visual Autentik & Riwayat:
-${evidenceContext}
-${historyContext}
-
-Aturan Analisis Berbasis Usia & Pedagogi PAUD:
-1. UMUR SEBAGAI KONTEKS: Analisis apakah perilaku yang diamati menunjukkan capaian yang sesuai dengan tahap perkembangan anak berdasarkan usianya (${ageContext.isAgeFilled ? ageContext.ageDisplay : 'usia anak'}).
-2. DILARANG MENGHAKIMI ATAU MEMBERI LABEL NEGATIF: DILARANG menulis "anak gagal", "anak tertinggal", "tidak normal", atau vonis defisit. Gunakan bahasa perkembangan yang hati-hati, hangat, dan mengapresiasi proses:
-   - Contoh bahasa yang tepat: "Pada usia ${ageContext.isAgeFilled ? ageContext.ageDisplay : 'tahap ini'}, Ananda mulai menunjukkan kemampuan...", "Perilaku yang diamati menunjukkan bahwa kemampuan tersebut mulai berkembang dan masih memerlukan penguatan melalui..."
-   - Jika bukti data belum mencukupi untuk suatu aspek: "Belum tersedia bukti observasi yang cukup untuk menyimpulkan capaian kemampuan ini."
-3. TRIANGULASI DATA: Hubungkan bukti antara Rubrik, Catatan Guru, Voice Note, Bukti Fisik/Foto, Konteks Kegiatan, dan Umur Anak.
-4. DETEKSI KETIDAKSESUAIAN: Jika rubrik mencatat level tinggi (BSH/BSB) tetapi catatan guru/suara menyebut masih sering dibantu, simpulkan bahwa kemampuan sudah muncul namun masih memerlukan pendampingan bertahap agar konsisten mandiri.
-5. Terjemahkan istilah rubrik (BB, MB, BSH, BSB) ke dalam bahasa narasi yang mudah dipahami orang tua secara bermakna.
-
-Keluarkan format JSON murni TANPA markdown/backticks:
-{
-  "overview": "Ringkasan analisis perkembangan ramah orang tua dengan mempertimbangkan usia anak (2-3 kalimat)",
-  "triangulationMatrix": [
-    { "id": "t1", "sourceType": "RUBRIC", "sourceLabel": "Rubrik Indikator", "fact": "Fakta teramati", "aspect": "KOGNITIF", "status": "SUPPORTING" }
-  ],
-  "inconsistencies": [
-    { "detected": false, "finding": "...", "interpretiveConclusion": "...", "recommendation": "..." }
-  ],
-  "interpretations": [
-    {
-      "aspect": "KOGNITIF",
-      "aspectName": "Kognitif",
-      "score": 75,
-      "consistencyStatus": "KONSISTEN",
-      "fakta": "Fakta konkret yang dilakukan anak dalam kegiatan",
-      "buktiSumber": ["Rubrik Penilaian", "Catatan Guru"],
-      "interpretasi": "Makna pedagogis terhadap tahapan usia anak yang mudah dipahami orang tua",
-      "kebutuhanDukungan": "Langkah dukungan dan stimulasi lanjutan"
-    }
-  ],
-  "strengths": ["Kekuatan teramati yang patut diapresiasi"],
-  "needsStimulation": ["Area kemampuan yang sedang berproses dan memerlukan penguatan"],
-  "generatedNarrative": "Narasi laporan perkembangan komprehensif ramah orang tua (120-180 kata) dengan perspektif usia anak, kemandirian yang dicapai, makna perkembangan, dan rekomendasi lanjutannya.",
-  "homeStimulationAdvice": ["Rekomendasi kegiatan bermain bersama di rumah yang praktis dan bermakna"]
-}
-`;
-
-      const response = await ai.models.generateContent({
-        model: 'gemini-2.5-flash',
-        contents: prompt,
-        config: {
-          responseMimeType: 'application/json',
-          temperature: 0.2,
-        },
-      });
-
-      const text = response.text || '';
-      const cleanJson = text.replace(/```json/g, '').replace(/```/g, '').trim();
-      const parsed = JSON.parse(cleanJson);
-
-      return {
-        overview: parsed.overview || `Analisis asesmen perkembangan Ananda ${studentName}`,
-        aspectScores: realAspectScores,
-        strengths: parsed.strengths || ['Menunjukkan keterlibatan positif dalam kegiatan'],
-        needsStimulation: parsed.needsStimulation || ['Penguatan stimulasi bertahap pada aktivitas eksplorasi'],
-        generatedNarrative: parsed.generatedNarrative || '',
-        homeStimulationAdvice: parsed.homeStimulationAdvice || [],
-        confidenceScore: confidenceInfo.score,
-        confidenceLevel: confidenceInfo.level,
-        confidenceFactors: confidenceInfo.factors,
-        triangulationMatrix: parsed.triangulationMatrix || [],
-        inconsistencies: parsed.inconsistencies || [],
-        interpretations: parsed.interpretations || [],
-        dataSourcesAnalyzed: {
-          rubricCount: ratedIndicators.length,
-          hasTeacherNote: Boolean(teacherNote),
-          hasVoiceNote: Boolean(voiceNoteText),
-          evidenceCount: evidences.length,
-          hasHistory: previousObservations.length > 0,
-        },
-        lastUpdated: new Date().toLocaleDateString('id-ID', {
-          day: 'numeric',
-          month: 'long',
-          year: 'numeric',
-        }),
-      };
-    }
-  } catch (err) {
-    console.warn('Gemini API unreachable or failed, fallback to Deterministic Triangulation Engine:', err);
+    console.warn('[AI Service] Authenticated server endpoint failed, falling back to deterministic triangulation:', serverErr);
   }
 
   // =========================================================================
-  // DETERMINISTIC TRIANGULATION & REASONING ENGINE (OFFLINE/FALLBACK)
+  // DETERMINISTIC TRIANGULATION & REASONING ENGINE (SECURE OFFLINE/FALLBACK)
+  // ZERO FABRICATED DEVELOPMENTAL CLAIMS
   // =========================================================================
   return buildDeterministicTriangulation({
     studentName,
@@ -328,6 +219,39 @@ function buildDeterministicTriangulation({
   const teacherNoteClean = teacherNote ? teacherNote.trim() : '';
   const voiceNoteClean = voiceNoteText ? voiceNoteText.trim() : '';
   const fullTextNotes = `${teacherNoteClean} ${voiceNoteClean}`.toLowerCase();
+
+  // If no rated indicators and no notes exist, provide honest neutral status (no fabricated claims)
+  if (ratedIndicators.length === 0 && !teacherNoteClean && !voiceNoteClean) {
+    return {
+      overview: `Belum tersedia bukti observasi yang cukup untuk Ananda ${studentName} pada kegiatan "${activityTitle}".`,
+      aspectScores: realAspectScores,
+      strengths: ['Belum tersedia cukup data asesmen terukur untuk memetakan kekuatan capaian ananda.'],
+      needsStimulation: ['Pengamatan autentik guru akan terus diperbarui seiring berlangsungnya kegiatan bermain di sekolah.'],
+      generatedNarrative: `Pengamatan untuk Ananda ${studentName} pada kegiatan "${activityTitle}" belum mencukupi untuk menarik kesimpulan perkembangan. Guru akan melengkapi catatan dan bukti autentik pada sesi pembelajaran berikutnya.`,
+      homeStimulationAdvice: [
+        'Ajak ananda berbincang santai tentang kegiatan bermain yang paling disukainya hari ini.',
+        'Dampingi ananda dalam aktivitas harian di rumah dengan suasana yang hangat dan menyenangkan.',
+      ],
+      confidenceScore: 0,
+      confidenceLevel: 'RENDAH',
+      confidenceFactors: ['Belum ada indikator yang dinilai', 'Belum ada catatan naratif guru'],
+      triangulationMatrix: [],
+      inconsistencies: [],
+      interpretations: [],
+      dataSourcesAnalyzed: {
+        rubricCount: 0,
+        hasTeacherNote: false,
+        hasVoiceNote: false,
+        evidenceCount: evidences.length,
+        hasHistory: previousObservations.length > 0,
+      },
+      lastUpdated: new Date().toLocaleDateString('id-ID', {
+        day: 'numeric',
+        month: 'long',
+        year: 'numeric',
+      }),
+    };
+  }
 
   const assistanceKeywords = [
     'bantuan', 'bantu', 'arahan', 'dibimbing', 'ragu', 'masih bingung',
@@ -716,9 +640,10 @@ export async function fetchLessonPlanRecommendation(params: {
   });
 
   try {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/ai/lesson-plan-recommendation', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(params),
     });
     if (res.ok) {
@@ -806,9 +731,10 @@ export async function analyzeActivityPhoto(params: {
   schoolContext?: any;
 }): Promise<PhotoAnalysisResult> {
   try {
+    const authHeaders = await getAuthHeader();
     const res = await fetch('/api/ai/analyze-photo', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: authHeaders,
       body: JSON.stringify(params),
     });
     if (res.ok) {
@@ -822,17 +748,13 @@ export async function analyzeActivityPhoto(params: {
   }
 
   return {
-    visualDescription: `Dokumentasi menunjukkan keaktifan anak dalam berproses pada kegiatan "${params.activityTitle}". Terlihat koordinasi gerakan dan interaksi langsung dengan media bermain.`,
-    suggestedAspects: ['MOTORIK_HALUS', 'LITERASI_STEAM', 'JATI_DIRI'],
-    potentialBehaviors: [
-      'Menunjukkan koordinasi visual-motorik yang baik saat mengoperasikan media kegiatan.',
-      'Memperlihatkan ekspresi konsentrasi dan rasa ingin tahu yang tinggi terhadap benda di depannya.',
-      'Mencoba menyusun atau mengeksplorasi media dengan cara unik dan mandiri.',
-    ],
+    visualDescription: 'Analisis visual otomatis belum tersedia. Gunakan foto sebagai bukti pendukung dan lengkapi deskripsi berdasarkan apa yang benar-benar diamati guru.',
+    suggestedAspects: [],
+    potentialBehaviors: [],
     suggestedFollowUpQuestions: [
-      'Bagaimana caramu menyusun benda ini sehingga bisa berdiri seimbang?',
-      'Ceritakan pada Ibu guru, apa yang sedang kamu buat ini?',
+      'Apa yang benar-benar tampak dilakukan anak pada dokumentasi ini?',
+      'Bukti perilaku apa yang dapat diverifikasi melalui pengamatan langsung?'
     ],
-    pedagogicInsight: 'Apresiasi proses usaha anak daripada hasil jadinya. Sediakan media variatif tambahan jika anak ingin memperluas kreasinya.',
+    pedagogicInsight: 'Dokumentasi foto tidak boleh menjadi satu-satunya dasar penilaian. Validasi dengan pengamatan autentik guru.'
   };
 }

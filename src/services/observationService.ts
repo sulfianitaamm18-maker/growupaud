@@ -95,8 +95,19 @@ export const observationService = {
       const obsRef = collection(db, 'observations');
       let q;
 
-      if ((userRole === 'PARENT' || userRole === 'ORANG_TUA') && parentStudentIds && parentStudentIds.length > 0) {
-        q = query(obsRef, where('studentId', 'in', parentStudentIds.slice(0, 10)));
+      if ((userRole === 'PARENT' || userRole === 'ORANG_TUA')) {
+        if (parentStudentIds && parentStudentIds.length > 0) {
+          q = query(obsRef, where('studentId', 'in', parentStudentIds.slice(0, 10)));
+        } else {
+          return [];
+        }
+      } else if (userRole === 'TEACHER' || userRole === 'GURU') {
+        // Strict Teacher Isolation: Guru queries observations where teacherId == auth.currentUser.uid
+        q = query(
+          obsRef,
+          where('schoolId', '==', schoolId),
+          where('teacherId', '==', auth.currentUser.uid)
+        );
       } else {
         q = query(obsRef, where('schoolId', '==', schoolId));
       }
@@ -227,6 +238,13 @@ export const observationService = {
         if (onUpdate) onUpdate([]);
         return () => {};
       }
+    } else if (userRole === 'TEACHER' || userRole === 'GURU') {
+      // Strict Teacher Isolation: Guru queries observations where teacherId == auth.currentUser.uid
+      q = query(
+        obsRef,
+        where('schoolId', '==', schoolId),
+        where('teacherId', '==', auth.currentUser.uid)
+      );
     } else {
       q = query(obsRef, where('schoolId', '==', schoolId));
     }

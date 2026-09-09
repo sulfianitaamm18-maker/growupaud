@@ -69,12 +69,44 @@ service cloud.firestore {
       );
     }
 
+    function getUserClassId() {
+      return existsUserData() && ('classId' in getUserData()) ? getUserData().classId : '';
+    }
+
+    function getUserClassName() {
+      return existsUserData() && ('className' in getUserData()) ? getUserData().className : '';
+    }
+
+    function isTeacherAssignedToStudent(studentData) {
+      return isTeacher() && studentData.schoolId == getUserSchoolId() && (
+        ('teacherIds' in studentData && studentData.teacherIds is list && request.auth.uid in studentData.teacherIds) ||
+        (getUserClassId() != '' && 'classId' in studentData && getUserClassId() == studentData.classId) ||
+        (getUserClassName() != '' && 'className' in studentData && getUserClassName() == studentData.className) ||
+        ('classId' in studentData && studentData.classId != '' && 
+         exists(/databases/$(database)/documents/classes/$(studentData.classId)) && 
+         (
+           get(/databases/$(database)/documents/classes/$(studentData.classId)).data.teacherId == request.auth.uid ||
+           ('teacherIds' in get(/databases/$(database)/documents/classes/$(studentData.classId)).data && 
+            get(/databases/$(database)/documents/classes/$(studentData.classId)).data.teacherIds is list && 
+            request.auth.uid in get(/databases/$(database)/documents/classes/$(studentData.classId)).data.teacherIds)
+         )
+        )
+      );
+    }
+
+    function isParentOfStudent(studentData) {
+      return isParent() && (
+        ('parentIds' in studentData && studentData.parentIds is list && request.auth.uid in studentData.parentIds) ||
+        ('parentId' in studentData && studentData.parentId == request.auth.uid)
+      );
+    }
+
     // Collection 1: users/{userId}
     match /users/{userId} {
       // 1. Owner can read their own profile directly (NO recursive get() or helper calls)
       allow read: if request.auth != null && request.auth.uid == userId;
 
-      // 2. Admin/Principal in the SAME school (or SuperAdmin) can read profiles in their school
+      // 2. Admin/Principal/Operator in the SAME school (or SuperAdmin) can read profiles in their school
       allow read: if request.auth != null && (
         ((isAdmin() || isOperator() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
         isSuperAdmin()
@@ -111,9 +143,15 @@ service cloud.firestore {
 
     // Collection 3: classes/{classId}
     match /classes/{classId} {
-      // Read access: Admin, Principal, Teacher in the same school
+      // Read access: Admin, Principal, Operator in same school, or Teacher assigned to that class
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && resource.data.schoolId == getUserSchoolId()) ||
+        ((isAdmin() || isOperator() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
+        (isTeacher() && resource.data.schoolId == getUserSchoolId() && (
+          resource.data.teacherId == request.auth.uid ||
+          ('teacherIds' in resource.data && resource.data.teacherIds is list && request.auth.uid in resource.data.teacherIds) ||
+          getUserClassId() == classId ||
+          (getUserClassName() != '' && 'name' in resource.data && getUserClassName() == resource.data.name)
+        )) ||
         isSuperAdmin()
       );
 
@@ -134,19 +172,19 @@ service cloud.firestore {
     // Collection 4: students/{studentId}
     match /students/{studentId} {
       // Read access:
-      // - Admin / Principal / Teacher: read students in same school
-      // - Parent: ONLY read student if parent's UID is listed in parentIds or linked in parent's user profile
+      // - Admin / Principal / Operator: read students in same school (or SuperAdmin)
+      // - Teacher: ONLY read students strictly assigned to them (via teacherIds, classId, or className)
+      // - Parent: ONLY read student if parent's UID is in students.parentIds
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() &&
-          'parentIds' in resource.data &&
-          request.auth.uid in resource.data.parentIds
-        )
+        ((isAdmin() || isOperator() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        isTeacherAssignedToStudent(resource.data) ||
+        isParentOfStudent(resource.data)
       );
 
       // Write access:
-      // - ONLY Admin can create, update, or delete student master records in their school!
-      allow create: if (isAdmin() && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      // - ONLY Admin / Operator can create, update, or delete student master records in their school!
+      // - Users and Teachers CANNOT modify student parentIds or master profiles
+      allow create: if ((isAdmin() || isOperator()) && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
       allow update: if (
         (isAdmin() || isOperator()) &&
         resource.data.schoolId == getUserSchoolId() &&
@@ -158,33 +196,52 @@ service cloud.firestore {
     // Collection 5: observations/{obsId}
     match /observations/{obsId} {
       // Read access:
-      // - Admin / Principal / Teacher: read observations in same school
-      // - Parent: ONLY read observation if parent of the target student
+      // - Admin / Principal / Operator: read observations in same school
+      // - Teacher: ONLY observations created by this teacher OR for students assigned to this teacher
+      // - Parent: ONLY observation for their legitimate child where parentIds includes auth.uid
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        ((isAdmin() || isOperator() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() && (
+            resource.data.teacherId == request.auth.uid ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        ) ||
         (
           isParent() &&
           exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
-          'parentIds' in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data &&
-          request.auth.uid in get(/databases/$(database)/documents/students/$(resource.data.studentId)).data.parentIds
+          isParentOfStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
         )
       );
 
       // Create access:
-      // - Teacher: can create observation if teacherId matches auth.uid and schoolId matches
+      // - Teacher: can ONLY create observation if teacherId == auth.uid AND teacher is assigned to that student
+      // - Academic year must NOT be CLOSED
       // - Admin: can create in their school
       // - Principal & Parent: DENY
       allow create: if (
-        (isAdmin() && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isAdmin() && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin())
+        ) ||
         (
           isTeacher() && 
           request.resource.data.teacherId == request.auth.uid && 
-          request.resource.data.schoolId == getUserSchoolId()
+          request.resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data)
         )
+      ) && (
+        !('academicYearId' in request.resource.data) || 
+        request.resource.data.academicYearId == '' || 
+        !exists(/databases/$(database)/documents/academicYears/$(request.resource.data.academicYearId)) || 
+        get(/databases/$(database)/documents/academicYears/$(request.resource.data.academicYearId)).data.status != 'CLOSED'
       );
 
       // Update access:
-      // - Teacher: can update own observation in same school (cannot change teacherId or schoolId)
+      // - Teacher: can ONLY update own observation in same school
       // - Admin: can update in same school
       // - Principal & Parent: DENY
       allow update: if (
@@ -221,37 +278,247 @@ service cloud.firestore {
     // Collection 6: feedbacks/{feedbackId}
     match /feedbacks/{feedbackId} {
       // Read access:
-      // - Admin / Principal / Teacher: can read feedbacks in their school
-      // - Parent: can read feedbacks where they are author or related to student
+      // - Admin / Principal / Operator: can read feedbacks in their school
+      // - Teacher: can ONLY read feedback for students assigned to them in same school
+      // - Parent: can ONLY read feedbacks created by themselves (parentId == auth.uid)
       allow read: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isOperator() || isPrincipal() || isTeacher()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
-        (isParent() && resource.data.parentId == request.auth.uid)
+        ((isAdmin() || isOperator() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin() ||
+        (
+          isTeacher() &&
+          resource.data.schoolId == getUserSchoolId() &&
+          (
+            ('teacherId' in resource.data && resource.data.teacherId == request.auth.uid) ||
+            ('teacherIds' in resource.data && resource.data.teacherIds is list && request.auth.uid in resource.data.teacherIds) ||
+            ('classId' in resource.data && getUserClassId() != '' && resource.data.classId == getUserClassId()) ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        ) ||
+        (
+          isParent() &&
+          (
+            resource.data.parentId == request.auth.uid ||
+            ('parentIds' in resource.data && resource.data.parentIds is list && request.auth.uid in resource.data.parentIds)
+          )
+        )
       );
 
       // Create access:
-      // - Parent can create feedback for their school
-      // - Admin / Principal / Teacher can create
+      // - Parent can ONLY create feedback for their legitimate child (student.parentIds includes auth.uid)
+      // - Teacher / Admin can create
       allow create: if isAuthenticated() && isUserActive() && (
-        (isParent() &&
+        (
+          isParent() &&
           request.resource.data.parentId == request.auth.uid &&
           request.resource.data.schoolId == getUserSchoolId() &&
           exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
-          request.auth.uid in get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data.parentIds
+          isParentOfStudent(get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data)
         ) ||
-        ((isAdmin() || isTeacher() || isPrincipal()) && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
+        (
+          isTeacher() &&
+          request.resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data)
+        ) ||
+        (isAdmin() && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
       );
 
       // Update access:
-      // - Teacher, Principal, or Admin in same school can update (e.g. replyFromTeacher / reply)
-      // - Parent can update their own feedback
+      // - Teacher can only reply/update for assigned student
+      // - Admin can update in same school
+      // - Parent: DENY update (feedback is immutable once sent)
       allow update: if isAuthenticated() && isUserActive() && (
-        ((isAdmin() || isTeacher() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
+        (
+          isTeacher() &&
+          resource.data.schoolId == getUserSchoolId() &&
+          (
+            ('teacherId' in resource.data && resource.data.teacherId == request.auth.uid) ||
+            ('teacherIds' in resource.data && resource.data.teacherIds is list && request.auth.uid in resource.data.teacherIds) ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        ) ||
+        ((isAdmin() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) ||
+        isSuperAdmin()
       );
 
       // Delete access:
       allow delete: if isAuthenticated() && isUserActive() && (
-        (isAdmin() && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
+        (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin()
       );
+    }
+
+    // Collection 7: academicYears/{yearId}
+    match /academicYears/{yearId} {
+      // Read: Any active user in the same school (Admin, Principal, Teacher, Parent) or SuperAdmin
+      allow read: if isAuthenticated() && isUserActive() && (
+        resource.data.schoolId == getUserSchoolId() || isSuperAdmin()
+      );
+
+      // Write: Only Admin / Operator in the same school
+      allow create: if ((isAdmin() || isOperator()) && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow update: if (
+        (isAdmin() || isOperator()) &&
+        resource.data.schoolId == getUserSchoolId() &&
+        request.resource.data.schoolId == getUserSchoolId()
+      ) || isSuperAdmin();
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 8: enrollments/{enrollmentId}
+    match /enrollments/{enrollmentId} {
+      // Read access:
+      // - Admin / Principal / Operator: same school
+      // - Teacher: if teacher is assigned to student or class or in teacherIds
+      // - Parent: if parent is legitimate parent of the student
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isOperator() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() && (
+            ('teacherIds' in resource.data && resource.data.teacherIds is list && request.auth.uid in resource.data.teacherIds) ||
+            ('classId' in resource.data && getUserClassId() != '' && resource.data.classId == getUserClassId()) ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        ) ||
+        (
+          isParent() && (
+            ('parentIds' in resource.data && resource.data.parentIds is list && request.auth.uid in resource.data.parentIds) ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isParentOfStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        )
+      );
+
+      // Write access: Admin and Operator in same school only
+      allow create: if ((isAdmin() || isOperator()) && request.resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+      allow update: if (
+        (isAdmin() || isOperator()) &&
+        resource.data.schoolId == getUserSchoolId() &&
+        request.resource.data.schoolId == getUserSchoolId()
+      ) || isSuperAdmin();
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 9: semesterReports/{reportId}
+    match /semesterReports/{reportId} {
+      // Read access:
+      // - Admin / Principal / Operator: read in same school
+      // - Teacher: read if assigned to student or created report
+      // - Parent: read ONLY if report status == FINAL and user is parent of student
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isOperator() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() && (
+            resource.data.teacherId == request.auth.uid ||
+            (
+              exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+              isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+            )
+          )
+        ) ||
+        (
+          isParent() && resource.data.status == 'FINAL' && (
+            exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+            isParentOfStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+          )
+        )
+      );
+
+      // Create access: Teacher assigned to student, or Admin in same school
+      allow create: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isOperator()) && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && request.resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data)
+        )
+      );
+
+      // Update access:
+      // - Admin can update anytime
+      // - Teacher can update if not FINAL or moving to FINAL, and assigned to student
+      allow update: if isAuthenticated() && isUserActive() && (
+        (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin() ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() &&
+          (resource.data.status != 'FINAL' || request.resource.data.status == 'FINAL') &&
+          exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+        )
+      );
+
+      // Delete access: Admin only
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 10: annualReports/{reportId}
+    match /annualReports/{reportId} {
+      // Read access:
+      // - Admin / Principal: read in same school
+      // - Teacher: read if assigned to student
+      // - Parent: read ONLY if isFinal == true and is parent of student
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isOperator() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+        ) ||
+        (
+          isParent() && resource.data.isFinal == true &&
+          exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+          isParentOfStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+        )
+      );
+
+      // Create / Update access: Admin or Principal in same school, or Teacher assigned to student
+      allow create: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal()) && (request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin())) ||
+        (
+          isTeacher() && request.resource.data.schoolId == getUserSchoolId() &&
+          exists(/databases/$(database)/documents/students/$(request.resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(request.resource.data.studentId)).data)
+        )
+      );
+
+      allow update: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal()) && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin() ||
+        (
+          isTeacher() && resource.data.schoolId == getUserSchoolId() &&
+          resource.data.isFinal != true &&
+          exists(/databases/$(database)/documents/students/$(resource.data.studentId)) &&
+          isTeacherAssignedToStudent(get(/databases/$(database)/documents/students/$(resource.data.studentId)).data)
+        )
+      );
+
+      // Delete access: Admin only
+      allow delete: if (isAdmin() && resource.data.schoolId == getUserSchoolId()) || isSuperAdmin();
+    }
+
+    // Collection 11: auditLogs/{logId}
+    match /auditLogs/{logId} {
+      // Read access: Admin and Principal in the same school (or SuperAdmin)
+      allow read: if isAuthenticated() && isUserActive() && (
+        ((isAdmin() || isPrincipal()) && (resource.data.schoolId == getUserSchoolId() || isSuperAdmin()))
+      );
+
+      // Create access: Authenticated user in the same school (append-only)
+      allow create: if isAuthenticated() && isUserActive() && (
+        request.resource.data.schoolId == getUserSchoolId() || isSuperAdmin()
+      );
+
+      // Update / Delete: DENY (Audit logs are immutable append-only)
+      allow update, delete: if false;
     }
 
     // Default Deny for all unlisted collections

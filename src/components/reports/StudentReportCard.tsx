@@ -19,6 +19,37 @@ export const StudentReportCard: React.FC<StudentReportCardProps> = ({
   onAddDocumentation,
   canEdit = false,
 }) => {
+  const chartContainerRef = React.useRef<HTMLDivElement>(null);
+  const [isChartReady, setIsChartReady] = React.useState(false);
+
+  React.useEffect(() => {
+    const el = chartContainerRef.current;
+    if (!el) return;
+
+    const checkSize = () => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        setIsChartReady(true);
+      }
+    };
+
+    checkSize();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+            setIsChartReady(true);
+          }
+        }
+      });
+      ro.observe(el);
+      return () => ro.disconnect();
+    } else {
+      const timer = setTimeout(checkSize, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
   const radarChartData = canonical.aspects.map((asp) => ({
     subject: asp.aspectTitle,
     score: asp.score ?? 50,
@@ -60,29 +91,35 @@ export const StudentReportCard: React.FC<StudentReportCardProps> = ({
 
           <div className="border border-slate-200 rounded-md p-2 grid grid-cols-12 gap-2 bg-white items-center indicator-card break-inside-avoid">
             {/* Radar Chart */}
-            <div className="col-span-6 h-44 w-full flex items-center justify-center">
-              <ResponsiveContainer width="100%" height="100%">
-                <RadarChart cx="50%" cy="50%" outerRadius="68%" data={radarChartData}>
-                  <PolarGrid stroke="#e2e8f0" strokeDasharray="2 2" />
-                  <PolarAngleAxis
-                    dataKey="subject"
-                    tick={{ fill: '#334155', fontSize: 7, fontWeight: 600 }}
-                  />
-                  <PolarRadiusAxis
-                    angle={30}
-                    domain={[0, 100]}
-                    tick={{ fill: '#94a3b8', fontSize: 6 }}
-                  />
-                  <Radar
-                    name="Skor Capaian"
-                    dataKey="score"
-                    stroke="#4f46e5"
-                    strokeWidth={2}
-                    fill="#6366f1"
-                    fillOpacity={0.4}
-                  />
-                </RadarChart>
-              </ResponsiveContainer>
+            <div ref={chartContainerRef} className="col-span-6 h-44 min-h-[176px] w-full min-w-0 flex items-center justify-center">
+              {isChartReady ? (
+                <ResponsiveContainer width="100%" height={176} minWidth={120} minHeight={160} debounce={50}>
+                  <RadarChart cx="50%" cy="50%" outerRadius="68%" data={radarChartData}>
+                    <PolarGrid stroke="#e2e8f0" strokeDasharray="2 2" />
+                    <PolarAngleAxis
+                      dataKey="subject"
+                      tick={{ fill: '#334155', fontSize: 7, fontWeight: 600 }}
+                    />
+                    <PolarRadiusAxis
+                      angle={30}
+                      domain={[0, 100]}
+                      tick={{ fill: '#94a3b8', fontSize: 6 }}
+                    />
+                    <Radar
+                      name="Skor Capaian"
+                      dataKey="score"
+                      stroke="#4f46e5"
+                      strokeWidth={2}
+                      fill="#6366f1"
+                      fillOpacity={0.4}
+                    />
+                  </RadarChart>
+                </ResponsiveContainer>
+              ) : (
+                <div className="h-full w-full flex items-center justify-center text-[10px] text-slate-400">
+                  Memuat visualisasi...
+                </div>
+              )}
             </div>
 
             {/* 3 Quick Overview Cards */}

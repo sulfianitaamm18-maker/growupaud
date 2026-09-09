@@ -1,4 +1,4 @@
-import React, { useMemo } from 'react';
+import React, { useMemo, useState, useEffect, useRef } from 'react';
 import {
   ResponsiveContainer,
   BarChart,
@@ -13,6 +13,9 @@ import {
 } from 'recharts';
 import {
   BarChart2,
+  CheckCircle2,
+  Layers,
+  Camera,
 } from 'lucide-react';
 import { ObservationRecord, StudentProfile, DevelopmentalAspect } from '../../types';
 import { getWeeklyDayCounts } from '../../utils/dateUtils';
@@ -144,6 +147,37 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
     };
   }, [observations]);
 
+  const gridRef = useRef<HTMLDivElement>(null);
+  const [isReady, setIsReady] = useState(false);
+
+  useEffect(() => {
+    const el = gridRef.current;
+    if (!el) return;
+
+    const checkDimensions = () => {
+      if (el.clientWidth > 0 && el.clientHeight > 0) {
+        setIsReady(true);
+      }
+    };
+
+    checkDimensions();
+
+    if (typeof ResizeObserver !== 'undefined') {
+      const ro = new ResizeObserver((entries) => {
+        for (const entry of entries) {
+          if (entry.contentRect.width > 0 && entry.contentRect.height > 0) {
+            setIsReady(true);
+          }
+        }
+      });
+      ro.observe(el);
+      return () => ro.disconnect();
+    } else {
+      const timer = setTimeout(checkDimensions, 100);
+      return () => clearTimeout(timer);
+    }
+  }, []);
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
@@ -161,9 +195,9 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
         </span>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+      <div ref={gridRef} className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 min-w-0">
         {/* Chart 1: Jumlah Observasi Mingguan */}
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-w-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Observasi Mingguan
@@ -172,23 +206,31 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
               {totalWeeklyObs} Total
             </span>
           </div>
-          <div className="h-44 min-h-[176px] w-full">
-            <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={160}>
-              <BarChart data={weeklyObsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
-                <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#64748B' }} />
-                <YAxis tick={{ fontSize: 10, fill: '#64748B' }} allowDecimals={false} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1E293B',
-                    borderRadius: '8px',
-                    border: 'none',
-                    color: '#FFF',
-                    fontSize: '11px',
-                  }}
-                />
-                <Bar dataKey="count" fill="#10B981" radius={[6, 6, 0, 0]} name="Observasi" />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="h-44 min-h-[176px] w-full min-w-0 flex items-center justify-center">
+            {isReady && totalWeeklyObs > 0 ? (
+              <ResponsiveContainer width="100%" height={176} minWidth={100} minHeight={160} debounce={50}>
+                <BarChart data={weeklyObsData} margin={{ top: 10, right: 10, left: -20, bottom: 0 }}>
+                  <XAxis dataKey="day" tick={{ fontSize: 10, fill: '#64748B' }} />
+                  <YAxis tick={{ fontSize: 10, fill: '#64748B' }} allowDecimals={false} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1E293B',
+                      borderRadius: '8px',
+                      border: 'none',
+                      color: '#FFF',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Bar dataKey="count" fill="#10B981" radius={[6, 6, 0, 0]} name="Observasi" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full w-full flex flex-col items-center justify-center text-xs text-slate-400 gap-1.5 p-4 text-center">
+                <BarChart2 className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                <span className="font-medium text-slate-500">Belum ada observasi minggu ini</span>
+                <span className="text-[10px] text-slate-400">Grafik otomatis tampil saat observasi dicatat</span>
+              </div>
+            )}
           </div>
           <p className="text-[11px] text-slate-500 mt-2 text-center">
             {totalWeeklyObs > 0
@@ -198,7 +240,7 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
         </div>
 
         {/* Chart 2: Ketercapaian Asesmen Semester */}
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-w-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Capaian Semester
@@ -209,42 +251,52 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
                 : 'Belum ada data'}
             </span>
           </div>
-          <div className="h-44 min-h-[176px] w-full flex items-center justify-center relative">
-            <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={160}>
-              <PieChart>
-                <Pie
-                  data={semesterCompletionInfo.chartData}
-                  cx="50%"
-                  cy="50%"
-                  innerRadius={36}
-                  outerRadius={56}
-                  startAngle={90}
-                  endAngle={-270}
-                  dataKey="value"
-                >
-                  {semesterCompletionInfo.chartData.map((entry, idx) => (
-                    <Cell key={idx} fill={entry.color} />
-                  ))}
-                </Pie>
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1E293B',
-                    borderRadius: '8px',
-                    border: 'none',
-                    color: '#FFF',
-                    fontSize: '11px',
-                  }}
-                />
-              </PieChart>
-            </ResponsiveContainer>
-            <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
-              <span className="text-lg font-extrabold text-slate-800">
-                {semesterCompletionInfo.hasData ? `${semesterCompletionInfo.tercapaiPct}%` : '0%'}
-              </span>
-              <span className="text-[10px] text-slate-500 font-semibold">
-                {semesterCompletionInfo.hasData ? 'BSH / BSB' : 'Belum Ada'}
-              </span>
-            </div>
+          <div className="h-44 min-h-[176px] w-full min-w-0 flex items-center justify-center relative">
+            {isReady && semesterCompletionInfo.hasData ? (
+              <>
+                <ResponsiveContainer width="100%" height={176} minWidth={100} minHeight={160} debounce={50}>
+                  <PieChart>
+                    <Pie
+                      data={semesterCompletionInfo.chartData}
+                      cx="50%"
+                      cy="50%"
+                      innerRadius={36}
+                      outerRadius={56}
+                      startAngle={90}
+                      endAngle={-270}
+                      dataKey="value"
+                    >
+                      {semesterCompletionInfo.chartData.map((entry, idx) => (
+                        <Cell key={idx} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip
+                      contentStyle={{
+                        backgroundColor: '#1E293B',
+                        borderRadius: '8px',
+                        border: 'none',
+                        color: '#FFF',
+                        fontSize: '11px',
+                      }}
+                    />
+                  </PieChart>
+                </ResponsiveContainer>
+                <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none">
+                  <span className="text-lg font-extrabold text-slate-800">
+                    {semesterCompletionInfo.tercapaiPct}%
+                  </span>
+                  <span className="text-[10px] text-slate-500 font-semibold">
+                    BSH / BSB
+                  </span>
+                </div>
+              </>
+            ) : (
+              <div className="h-full w-full flex flex-col items-center justify-center text-xs text-slate-400 gap-1.5 p-4 text-center">
+                <CheckCircle2 className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                <span className="font-medium text-slate-500">Belum ada asesmen semester</span>
+                <span className="text-[10px] text-slate-400">Tercapai (BSH/BSB) dihitung otomatis</span>
+              </div>
+            )}
           </div>
           <p className="text-[11px] text-slate-500 mt-2 text-center">
             {semesterCompletionInfo.hasData
@@ -254,7 +306,7 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
         </div>
 
         {/* Chart 3: Perkembangan Tiap Aspek */}
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-w-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Capaian 6 Aspek
@@ -263,27 +315,35 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
               {aspectInfo.hasData ? `Rerata ${aspectInfo.overallAverage}%` : 'Belum ada data'}
             </span>
           </div>
-          <div className="h-44 min-h-[176px] w-full">
-            <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={160}>
-              <BarChart
-                layout="vertical"
-                data={aspectInfo.chartData}
-                margin={{ top: 5, right: 10, left: 15, bottom: 5 }}
-              >
-                <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 9, fill: '#64748B' }} />
-                <YAxis dataKey="aspect" type="category" tick={{ fontSize: 10, fill: '#334155' }} />
-                <Tooltip
-                  contentStyle={{
-                    backgroundColor: '#1E293B',
-                    borderRadius: '8px',
-                    border: 'none',
-                    color: '#FFF',
-                    fontSize: '11px',
-                  }}
-                />
-                <Bar dataKey="score" fill="#3B82F6" radius={[0, 6, 6, 0]} name="Capaian (%)" />
-              </BarChart>
-            </ResponsiveContainer>
+          <div className="h-44 min-h-[176px] w-full min-w-0 flex items-center justify-center">
+            {isReady && aspectInfo.hasData ? (
+              <ResponsiveContainer width="100%" height={176} minWidth={100} minHeight={160} debounce={50}>
+                <BarChart
+                  layout="vertical"
+                  data={aspectInfo.chartData}
+                  margin={{ top: 5, right: 10, left: 15, bottom: 5 }}
+                >
+                  <XAxis type="number" domain={[0, 100]} tick={{ fontSize: 9, fill: '#64748B' }} />
+                  <YAxis dataKey="aspect" type="category" tick={{ fontSize: 10, fill: '#334155' }} />
+                  <Tooltip
+                    contentStyle={{
+                      backgroundColor: '#1E293B',
+                      borderRadius: '8px',
+                      border: 'none',
+                      color: '#FFF',
+                      fontSize: '11px',
+                    }}
+                  />
+                  <Bar dataKey="score" fill="#3B82F6" radius={[0, 6, 6, 0]} name="Capaian (%)" />
+                </BarChart>
+              </ResponsiveContainer>
+            ) : (
+              <div className="h-full w-full flex flex-col items-center justify-center text-xs text-slate-400 gap-1.5 p-4 text-center">
+                <Layers className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                <span className="font-medium text-slate-500">Belum ada capaian 6 aspek</span>
+                <span className="text-[10px] text-slate-400">Rerata aspek dihitung dari rubrik penilaian</span>
+              </div>
+            )}
           </div>
           <p className="text-[11px] text-slate-500 mt-2 text-center">
             {aspectInfo.hasData
@@ -293,7 +353,7 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
         </div>
 
         {/* Chart 4: Jumlah Dokumentasi */}
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between">
+        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-w-0">
           <div className="flex items-center justify-between mb-3">
             <h3 className="text-xs font-bold text-slate-700 uppercase tracking-wider">
               Bukti Autentik
@@ -302,9 +362,9 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
               {evidenceInfo.total} Bukti
             </span>
           </div>
-          <div className="h-44 min-h-[176px] w-full">
-            {evidenceInfo.hasData ? (
-              <ResponsiveContainer width="100%" height="100%" minWidth={100} minHeight={160}>
+          <div className="h-44 min-h-[176px] w-full min-w-0 flex items-center justify-center">
+            {isReady && evidenceInfo.hasData ? (
+              <ResponsiveContainer width="100%" height={176} minWidth={100} minHeight={160} debounce={50}>
                 <PieChart>
                   <Pie
                     data={evidenceInfo.chartData}
@@ -332,8 +392,10 @@ export const GuruAnalyticsCharts: React.FC<GuruAnalyticsChartsProps> = React.mem
                 </PieChart>
               </ResponsiveContainer>
             ) : (
-              <div className="h-full flex items-center justify-center text-xs text-slate-400 font-medium">
-                Belum ada bukti autentik
+              <div className="h-full w-full flex flex-col items-center justify-center text-xs text-slate-400 gap-1.5 p-4 text-center">
+                <Camera className="w-8 h-8 text-slate-300 stroke-[1.5]" />
+                <span className="font-medium text-slate-500">Belum ada bukti autentik</span>
+                <span className="text-[10px] text-slate-400">Foto, video, & rekaman suara terdata</span>
               </div>
             )}
           </div>

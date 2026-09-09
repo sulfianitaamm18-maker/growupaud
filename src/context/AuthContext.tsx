@@ -109,8 +109,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setUser(firebaseUser);
               setError(null);
               setAdminExists(true);
-              console.log('[SCHOOL SYNC]\nSTART');
-              schoolStore.refreshFromFirestore(profile.schoolId || 'main-school');
+              schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role);
             }
           } else {
             console.warn(`[PROFILE DOCUMENT NOT FOUND]\nUID: ${firebaseUser.uid}\nPath: ${profilePath}`);
@@ -233,8 +232,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setError(null);
 
       // Synchronize school data for active user context using schoolId from Firestore profile
-      console.log('[SCHOOL SYNC]\nSTART');
-      await schoolStore.refreshFromFirestore(profile.schoolId || 'main-school');
+      await schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role);
     } catch (err: any) {
       setLoading(false);
       let errMsg = err.message || 'Gagal melakukan login. Silakan periksa kembali kredensial Anda.';
