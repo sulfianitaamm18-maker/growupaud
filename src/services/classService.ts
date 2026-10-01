@@ -19,6 +19,12 @@ export const classService = {
     const currentUid = teacherUid || auth.currentUser.uid;
     const normalizedRole = (userRole || '').toUpperCase();
     const isTeacher = normalizedRole === 'TEACHER' || normalizedRole === 'GURU';
+    const isParent = normalizedRole === 'PARENT' || normalizedRole === 'ORANG_TUA';
+
+    // Orang Tua tidak membutuhkan dan tidak memiliki akses baca langsung ke collection classes
+    if (isParent) {
+      return [];
+    }
 
     try {
       const classesRef = collection(db, 'classes');
@@ -71,8 +77,8 @@ export const classService = {
         })) as ClassRoom[];
       }
     } catch (error) {
-      console.warn('Firestore getClasses error:', error);
-      throw new Error('Gagal mengambil daftar kelas dari Firestore.');
+      console.warn('Firestore getClasses notice (handled gracefully):', error);
+      return [];
     }
     return [];
   },

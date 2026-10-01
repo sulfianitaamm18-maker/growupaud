@@ -29,6 +29,8 @@ export interface SchoolProfile {
   facilitiesSummary?: string; // sarana prasarana sekolah
   schoolFacilities?: string;
   studentCharacteristics?: string; // karakteristik & latar belakang peserta didik
+  logoSize?: 'SMALL' | 'MEDIUM' | 'LARGE';
+  logoPosition?: 'LEFT' | 'CENTER';
 }
 
 export interface TeacherProfile {
@@ -60,6 +62,7 @@ export interface ParentProfile {
 
 export interface UserProfile {
   id: string;
+  uid?: string;
   username: string;
   name: string;
   displayName?: string;
@@ -111,6 +114,7 @@ export interface IndicatorItem {
   description?: string;
   aspect: DevelopmentalAspect;
   aspectId?: DevelopmentalAspect;
+  aspectLabel?: string;
   subaspectId?: string;
   elementId?: string;
   cpId?: string;
@@ -122,6 +126,50 @@ export interface IndicatorItem {
   rubric?: RubricDefinition;
   rating?: RatingLevel; // Status penilaian observasi
   checked?: boolean; // Untuk kompatibilitas
+  // Field pendukung analisis AI & asesmen perkembangan
+  isRelevant?: boolean;
+  activityContext?: string;
+  learningObjective?: string;
+  ageGroup?: string;
+  observableBehavior?: string;
+  teacherNote?: string;
+  planningId?: string;
+  createdAt?: string;
+  updatedAt?: string;
+}
+
+export interface DevelopmentIndicatorGenerationRequest {
+  learningObjective: string;
+  activity: string;
+  ageGroup: string;
+  activityContext?: string;
+  theme?: string;
+  subtheme?: string;
+}
+
+export interface GeneratedIndicatorResult {
+  aspect: DevelopmentalAspect;
+  aspectLabel: string;
+  text: string;
+  observableBehavior: string;
+  isRelevant: boolean;
+  rubric: RubricDefinition;
+  reason?: string;
+}
+
+export interface DevelopmentIndicatorEngineResponse {
+  learningObjective: string;
+  activity: string;
+  ageGroup: string;
+  activityContext?: string;
+  relevantAspects: DevelopmentalAspect[];
+  indicators: GeneratedIndicatorResult[];
+  nonFocusAspects: Array<{
+    aspect: DevelopmentalAspect;
+    aspectLabel: string;
+    reason: string;
+  }>;
+  pedagogicalAdvice?: string;
 }
 
 export interface ActivityPreset {
@@ -150,12 +198,30 @@ export interface ActivityPreset {
   ownerType?: 'NATIONAL' | 'SCHOOL' | 'TEACHER';
   ownerId?: string;
   indicators: IndicatorItem[];
+  nonFocusAspects?: Array<{
+    aspect: DevelopmentalAspect;
+    aspectLabel: string;
+    reason: string;
+  }>;
+  pedagogicalAdvice?: string;
   provocationQuestions?: string[];
   pedagogicalRationale?: string;
   tarlAdjustments?: { perluDukungan: string; berkembang: string; pengayaan: string };
   materialAlternatives?: Array<{ main: string; alternative: string; reason: string }>;
   modality?: string;
   documentationFocus?: string;
+  linkedCPIds?: string[];
+  linkedTPIds?: string[];
+  linkedObjectiveIds?: string[];
+  selectedCPs?: CPItem[];
+  selectedTPs?: TPItem[];
+}
+
+export interface LearningObjectiveItem {
+  objectiveId: string;
+  objectiveText: string;
+  linkedCPIds: string[];
+  linkedTPIds: string[];
 }
 
 export interface CPItem {
@@ -359,13 +425,26 @@ export interface ObservationRecord {
   updatedAt?: string;
 }
 
-export type StudentStatus = 'ACTIVE' | 'PROMOTED' | 'GRADUATED' | 'TRANSFERRED' | 'INACTIVE';
+export type StudentLifecycleStatus =
+  | 'NEW'
+  | 'ACTIVE'
+  | 'PROMOTED'
+  | 'REPEAT'
+  | 'TRANSFER_IN'
+  | 'GRADUATED'
+  | 'TRANSFERRED'
+  | 'INACTIVE';
+
+export type StudentStatus = StudentLifecycleStatus;
 
 export interface StudentProfile {
   id: string;
   schoolId?: string;
   classId?: string;
   parentIds?: string[];
+  parentUid?: string;
+  parentEmail?: string;
+  parentPhone?: string;
   teacherIds?: string[];
   name: string;
   nickname: string;
@@ -433,6 +512,74 @@ export interface ParentFeedback {
   repliedBy?: string;
   schoolId?: string;
   createdAt?: string;
+}
+
+// ==========================================
+// SISTEM NOTIFIKASI & PERCAKAPAN BERTAUT (MESSAGING & THREADS)
+// Role Authority: ADMIN, PRINCIPAL, TEACHER, PARENT
+// ==========================================
+
+export interface ConversationParticipant {
+  userId: string;
+  name: string;
+  role: string;
+  avatar?: string;
+  schoolId?: string;
+}
+
+export interface Conversation {
+  id: string;
+  schoolId: string;
+  subject: string;
+  participantIds: string[];
+  participantRoles: string[];
+  participants: ConversationParticipant[];
+  lastMessage: string;
+  lastMessageAt: string;
+  lastSenderId: string;
+  lastSenderName: string;
+  lastSenderRole?: string;
+  unreadCountByUser?: Record<string, number>;
+  studentId?: string;
+  studentName?: string;
+  createdAt: string;
+  updatedAt: string;
+}
+
+export interface Message {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  senderName: string;
+  senderRole: string;
+  senderAvatar?: string;
+  recipientId?: string;
+  participantIds: string[];
+  body: string;
+  createdAt: string;
+  readBy?: string[];
+  readAt?: string;
+  replyTo?: {
+    id: string;
+    senderName: string;
+    body: string;
+  };
+}
+
+export type NotificationType = 'MESSAGE' | 'OBSERVATION' | 'REPORT' | 'FEEDBACK' | 'SYSTEM';
+
+export interface AppNotification {
+  id: string;
+  userId: string;
+  senderId?: string;
+  senderName?: string;
+  senderRole?: string;
+  type: NotificationType;
+  title: string;
+  body: string;
+  relatedId?: string; // e.g. conversationId, observationId, reportId
+  isRead: boolean;
+  createdAt: string;
 }
 
 // ==========================================
@@ -590,6 +737,11 @@ export interface PedagogicalRecommendation {
 export type AcademicYearStatus = 'PLANNED' | 'ACTIVE' | 'CLOSED';
 export type SemesterNumber = 1 | 2;
 
+/**
+ * Schema untuk koleksi Firestore `academicYears`
+ * Mengatur siklus tahun ajaran sekolah dengan status PLANNED, ACTIVE, dan CLOSED.
+ * Invarian penting: Hanya boleh ada maksimal 1 tahun ajaran berstatus ACTIVE per sekolah.
+ */
 export interface AcademicYear {
   id: string;
   schoolId: string;
@@ -598,12 +750,13 @@ export interface AcademicYear {
   activeSemester: SemesterNumber;
   startDate: string; // YYYY-MM-DD
   endDate: string; // YYYY-MM-DD
+  description?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
 export type EnrollmentEntryType = 'NEW' | 'PROMOTED' | 'TRANSFER_IN' | 'REPEAT';
-export type EnrollmentStatus = 'ACTIVE' | 'PROMOTED' | 'GRADUATED' | 'TRANSFERRED' | 'WITHDRAWN';
+export type EnrollmentStatus = 'ACTIVE' | 'PROMOTED' | 'REPEAT' | 'GRADUATED' | 'TRANSFERRED' | 'WITHDRAWN';
 
 export interface Enrollment {
   id: string;
@@ -711,29 +864,37 @@ export interface AnnualReport {
   updatedAt: string;
 }
 
+export type AuditActionType =
+  | 'CREATE_ACADEMIC_YEAR'
+  | 'ACTIVATE_ACADEMIC_YEAR'
+  | 'SWITCH_SEMESTER'
+  | 'CLOSE_ACADEMIC_YEAR'
+  | 'ENROLL_STUDENT'
+  | 'PROMOTE_STUDENT'
+  | 'REPEAT_STUDENT'
+  | 'GRADUATE_STUDENT'
+  | 'TRANSFER_STUDENT'
+  | 'FINALIZE_SEMESTER_REPORT'
+  | 'FINALIZE_ANNUAL_REPORT'
+  | 'ARCHIVE_STUDENT'
+  | 'RECORD_OBSERVATION'
+  | 'UPDATE_OBSERVATION'
+  | 'DELETE_OBSERVATION';
+
 export interface AuditLog {
   id: string;
-  schoolId: string;
+  actorId: string;
   actorUserId: string;
+  actorName: string;
+  actorEmail?: string | null;
   actorRole: UserRole | string;
-  actorName?: string;
-  action:
-    | 'CREATE_ACADEMIC_YEAR'
-    | 'ACTIVATE_ACADEMIC_YEAR'
-    | 'SWITCH_SEMESTER'
-    | 'CLOSE_ACADEMIC_YEAR'
-    | 'ENROLL_STUDENT'
-    | 'PROMOTE_STUDENT'
-    | 'REPEAT_STUDENT'
-    | 'GRADUATE_STUDENT'
-    | 'TRANSFER_STUDENT'
-    | 'FINALIZE_SEMESTER_REPORT'
-    | 'FINALIZE_ANNUAL_REPORT'
-    | 'ARCHIVE_STUDENT';
-  targetType: 'ACADEMIC_YEAR' | 'ENROLLMENT' | 'STUDENT' | 'SEMESTER_REPORT' | 'ANNUAL_REPORT';
-  targetId: string;
-  targetName?: string;
+  action: AuditActionType | string;
+  module?: string;
+  schoolId: string;
   timestamp: string;
-  metadata?: Record<string, any>;
+  targetType?: 'ACADEMIC_YEAR' | 'ENROLLMENT' | 'STUDENT' | 'SEMESTER_REPORT' | 'ANNUAL_REPORT' | string;
+  targetId?: string;
+  targetName?: string;
+  metadata?: Record<string, any> | null;
 }
 

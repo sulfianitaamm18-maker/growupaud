@@ -49,6 +49,13 @@ class SchoolStoreService {
   }
 
   /**
+   * Returns true if store has already completed initial sync
+   */
+  public getIsInitialized(): boolean {
+    return this.isInitialized;
+  }
+
+  /**
    * Reset store memory state on logout
    */
   public clearCache(): void {
@@ -93,12 +100,20 @@ class SchoolStoreService {
           userRole ||
           (auth.currentUser ? userStore.getCachedProfile(auth.currentUser.uid)?.role : undefined);
 
-        const schoolPromise = schoolService.getSchoolProfile(schoolId);
-        const classes = await classService.getClasses(schoolId, effectiveRole);
-        const [school, students] = await Promise.all([
-          schoolPromise,
-          studentService.getStudents(schoolId, effectiveRole, parentStudentIds, classes),
-        ]);
+        const isParentRole = effectiveRole === 'PARENT' || effectiveRole === 'ORANG_TUA';
+        const schoolPromise = schoolService.getSchoolProfile(schoolId).catch(() => null);
+        const classesPromise = isParentRole
+          ? Promise.resolve([])
+          : classService.getClasses(schoolId, effectiveRole).catch(() => []);
+
+        // Dapatkan data siswa dan kelas secara paralel tanpa saling membatalkan
+        const [school, classes] = await Promise.all([schoolPromise, classesPromise]);
+        const students = await studentService
+          .getStudents(schoolId, effectiveRole, parentStudentIds, classes || [])
+          .catch((err) => {
+            console.warn('SchoolStore studentService warning:', err);
+            return [];
+          });
 
         if (school) {
           this.cachedSchool = school;
@@ -194,6 +209,49 @@ class SchoolStoreService {
     this.cachedSchool = saved;
     this.notifyListeners();
     return saved;
+  }
+
+  async updateSchoolLogo(
+    logoUrl: string,
+    options?: { logoSize?: 'SMALL' | 'MEDIUM' | 'LARGE'; logoPosition?: 'LEFT' | 'CENTER' }
+  ): Promise<SchoolProfile> {
+    const current = this.getSchoolProfile();
+    const updated: SchoolProfile = {
+      ...current,
+      schoolLogo: logoUrl,
+      ...(options?.logoSize ? { logoSize: options.logoSize } : {}),
+      ...(options?.logoPosition ? { logoPosition: options.logoPosition } : {}),
+    };
+    return this.saveSchoolProfile(updated);
+  }
+
+  async removeSchoolLogo(): Promise<SchoolProfile> {
+    const current = this.getSchoolProfile();
+    const updated: SchoolProfile = {
+      ...current,
+      schoolLogo: '',
+    };
+    return this.saveSchoolProfile(updated);
+  }
+
+  async saveKopSettings(settings: {
+    schoolName?: string;
+    address?: string;
+    phone?: string;
+    email?: string;
+    principalName?: string;
+    academicYear?: string;
+    semester?: string;
+    schoolLogo?: string;
+    logoSize?: 'SMALL' | 'MEDIUM' | 'LARGE';
+    logoPosition?: 'LEFT' | 'CENTER';
+  }): Promise<SchoolProfile> {
+    const current = this.getSchoolProfile();
+    const updated: SchoolProfile = {
+      ...current,
+      ...settings,
+    };
+    return this.saveSchoolProfile(updated);
   }
 
   // Teachers (Cached for UI)

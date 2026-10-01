@@ -37,10 +37,10 @@ const SuperAdminDashboard = React.lazy(() =>
   import('./components/admin/SuperAdminDashboard').then((m) => ({ default: m.SuperAdminDashboard }))
 );
 const ActivityAssessmentModal = React.lazy(() =>
-  import('./components/guru/ActivityAssessmentModal').then((m) => ({ default: m.ActivityAssessmentModal }))
+  import('./components/guru/ActivityAssessmentModal').then((m) => ({ default: m.ActivityAssessmentModal || m.default }))
 );
 const ReportPreviewModal = React.lazy(() =>
-  import('./components/reports/ReportPreviewModal').then((m) => ({ default: m.ReportPreviewModal }))
+  import('./components/reports/ReportPreviewModal').then((m) => ({ default: m.ReportPreviewModal || m.default }))
 );
 
 function DashboardLoadingFallback() {
@@ -98,8 +98,16 @@ function MainApp() {
     const role = (userProfile.role || currentUser.role || '').toUpperCase();
     const isParent = role === 'PARENT' || role === 'ORANG_TUA';
 
+    const initialParentStudentIds = isParent
+      ? Array.from(new Set([
+          ...(userProfile.studentIds || []),
+          ...(userProfile.linkedStudentIds || []),
+          ...(userProfile.childId ? [userProfile.childId] : []),
+        ]))
+      : undefined;
+
     schoolStore.refreshFromFirestore(schoolId, role);
-    observationStore.initForContext(schoolId, role);
+    observationStore.initForContext(schoolId, role, initialParentStudentIds);
 
     // Subscribe to real-time parent feedbacks from Firestore (hanya untuk role yang berhak dan membutuhkan)
     let unsubFeedbacks = () => {};
@@ -149,8 +157,9 @@ function MainApp() {
       unsubFeedbacks();
       unsubObs();
       unsubSchool();
+      observationStore.stopSubscription();
     };
-  }, [loading, isAuthenticated, userProfile?.id, userProfile?.role, userProfile?.schoolId, activeSchool?.id, currentUser.role]);
+  }, [loading, isAuthenticated, userProfile?.id, userProfile?.role, userProfile?.schoolId]);
 
   // Session Isolation: Reset local states when user logs out or switches accounts
   useEffect(() => {
@@ -202,19 +211,6 @@ function MainApp() {
       await observationStore.updateObservation(recordWithTeacher);
     } else {
       await observationStore.addObservation(recordWithTeacher);
-
-      // Update student observations count & latest observation date in persistent schoolStore
-      const currentStudents = schoolStore.getStudents();
-      currentStudents.forEach((std) => {
-        if (std.id === recordWithTeacher.studentId) {
-          const updatedStd: StudentProfile = {
-            ...std,
-            observationsCount: (std.observationsCount || 0) + 1,
-            latestObservationDate: recordWithTeacher.date,
-          };
-          schoolStore.updateStudent(updatedStd);
-        }
-      });
     }
   };
 

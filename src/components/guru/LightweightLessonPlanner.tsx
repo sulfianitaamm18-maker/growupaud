@@ -28,9 +28,12 @@ import { curriculumStore } from '../../services/curriculumStore';
 import {
   fetchLessonPlanRecommendation,
   LessonPlanRecommendationResult,
+  generateDevelopmentIndicators,
 } from '../../services/aiService';
 import { ThematicCuratedActivity, getCuratedActivitiesForTheme } from '../../services/thematicActivityCurator';
-import { ActivityPreset, ThemeItem, SubthemeItem, CPItem, ATPItem, TPItem } from '../../types';
+import { ActivityPreset, ThemeItem, SubthemeItem, CPItem, ATPItem, TPItem, DevelopmentalAspect, IndicatorItem } from '../../types';
+import { ASPECT_LABELS } from '../../data/initialData';
+import { AIIndicatorPlannerStep } from './planner/AIIndicatorPlannerStep';
 
 interface LightweightLessonPlannerProps {
   onStartObservationWithActivity: (activityId: string, activityTitle: string) => void;
@@ -63,6 +66,23 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
     return () => unsub();
   }, []);
 
+  // Deduplicated CPs and TPs to prevent duplicate key rendering
+  const uniqueCPs = useMemo(() => {
+    const map = new Map<string, CPItem>();
+    allCPs.forEach((c) => {
+      if (c && c.id) map.set(c.id, c);
+    });
+    return Array.from(map.values());
+  }, [allCPs]);
+
+  const uniqueTPs = useMemo(() => {
+    const map = new Map<string, TPItem>();
+    allTPs.forEach((t) => {
+      if (t && t.id) map.set(t.id, t);
+    });
+    return Array.from(map.values());
+  }, [allTPs]);
+
   // Step 1: Selected Theme & Search
   const [selectedThemeId, setSelectedThemeId] = useState<string>(() => {
     const active = curriculumStore.getThemes().find((t) => t.status === 'ACTIVE');
@@ -78,15 +98,18 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
   // Age group configuration
   const [ageGroup, setAgeGroup] = useState<string>('Usia 5-6 Tahun (Kelompok B)');
 
-  // Step 3: Selected CP, ATP, TP
-  const [selectedCpId, setSelectedCpId] = useState<string>('cp-03');
-  const [selectedAtpId, setSelectedAtpId] = useState<string>('atp-03-1');
-  const [selectedTpId, setSelectedTpId] = useState<string>('tp-lit-01');
+  // Step 3: Selected CP and TP (Support 1 or more CPs and 1 or more TPs)
+  const [selectedCpIds, setSelectedCpIds] = useState<string[]>(['cp-03']);
+  const [selectedTpIds, setSelectedTpIds] = useState<string[]>(['tp-lit-01']);
+  const [customTpText, setCustomTpText] = useState<string>('');
 
   // Step 4: AI Recommendations & Curated Activities
   const [isLoadingAI, setIsLoadingAI] = useState<boolean>(false);
   const [aiResult, setAiResult] = useState<LessonPlanRecommendationResult | null>(null);
   const [availableActivities, setAvailableActivities] = useState<ThematicCuratedActivity[]>([]);
+  const [staticCuratedActivities, setStaticCuratedActivities] = useState<ThematicCuratedActivity[]>([]);
+  const [aiGeneratedActivities, setAiGeneratedActivities] = useState<ThematicCuratedActivity[]>([]);
+  const [activitySourceMode, setActivitySourceMode] = useState<'AI_RECOMMENDATION' | 'STATIC_CURATED'>('AI_RECOMMENDATION');
 
   // Step 5: Selected Activity & Custom Adjustments
   const [chosenActivity, setChosenActivity] = useState<ThematicCuratedActivity | null>(null);
@@ -94,6 +117,16 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
   const [customMaterials, setCustomMaterials] = useState<string>('');
   const [customQuestions, setCustomQuestions] = useState<string>('');
   const [teacherNotes, setTeacherNotes] = useState<string>('');
+
+  // AI Development Indicators state (6 aspects)
+  const [currentIndicators, setCurrentIndicators] = useState<IndicatorItem[]>([]);
+  const [nonFocusAspects, setNonFocusAspects] = useState<Array<{
+    aspect: DevelopmentalAspect;
+    aspectLabel: string;
+    reason: string;
+  }>>([]);
+  const [pedagogicalAdvice, setPedagogicalAdvice] = useState<string>('');
+  const [isLoadingIndicators, setIsLoadingIndicators] = useState<boolean>(false);
 
   // Toast feedback
   const [toastMessage, setToastMessage] = useState<string | null>(null);
@@ -143,22 +176,19 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
     }
   }, [selectedThemeId, currentSubthemes]);
 
-  // Ensure smart CP/ATP/TP defaults based on theme
+  // Ensure smart CP/TP defaults based on theme
   useEffect(() => {
     if (!currentTheme) return;
     const thmName = currentTheme.name.toLowerCase();
     if (thmName.includes('tanaman') || thmName.includes('alam') || thmName.includes('air') || thmName.includes('benda') || thmName.includes('sains')) {
-      setSelectedCpId('cp-03');
-      setSelectedAtpId('atp-03-1');
-      setSelectedTpId('tp-lit-01');
+      setSelectedCpIds(['cp-03']);
+      setSelectedTpIds(['tp-lit-01']);
     } else if (thmName.includes('keluarga') || thmName.includes('diri') || thmName.includes('budaya') || thmName.includes('agama')) {
-      setSelectedCpId('cp-01');
-      setSelectedAtpId('atp-01-1');
-      setSelectedTpId('tp-nam-01');
+      setSelectedCpIds(['cp-01']);
+      setSelectedTpIds(['tp-nam-01']);
     } else {
-      setSelectedCpId('cp-02');
-      setSelectedAtpId('atp-02-1');
-      setSelectedTpId('tp-jd-01');
+      setSelectedCpIds(['cp-02']);
+      setSelectedTpIds(['tp-jd-01']);
     }
   }, [selectedThemeId]);
 
@@ -170,19 +200,33 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
     const subName = currentSubtheme ? currentSubtheme.name : 'Umum';
 
     try {
-      // 1. Get curated activities instantly
-      const curated = getCuratedActivitiesForTheme(currentTheme.name, subName, isKelA);
-      setAvailableActivities(curated);
+      // 1. Get curated activities instantly with selected CP & TP bindings
+      const curated = getCuratedActivitiesForTheme(
+        currentTheme.name,
+        subName,
+        isKelA,
+        selectedCpIds,
+        selectedTpIds
+      );
+      setStaticCuratedActivities(curated);
 
+      // Initially set curated while AI loads
+      setAvailableActivities(curated);
       if (curated.length > 0) {
         selectAndInitActivity(curated[0]);
       }
 
       // 2. Fetch AI recommendation for deeper contextual alignment
       const schoolProfile = schoolStore.getSchoolProfile();
+      const chosenCps = allCPs.filter((c) => selectedCpIds.includes(c.id));
+      const chosenTps = allTPs.filter((t) => selectedTpIds.includes(t.id));
       const res = await fetchLessonPlanRecommendation({
         theme: currentTheme.name,
         subtheme: subName,
+        selectedCPs: chosenCps,
+        selectedCPIds: selectedCpIds,
+        selectedTPs: chosenTps,
+        selectedTpIds: selectedTpIds,
         ageGroup,
         schoolContext: {
           name: schoolProfile.schoolName || 'PAUD Terpadu',
@@ -193,8 +237,50 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
       });
 
       setAiResult(res);
-      if (res.curatedActivityOptions && res.curatedActivityOptions.length > 0) {
+
+      // PRIORITIZE AI RECOMMENDATION: When AI succeeds, use its dynamic contextual activities!
+      if (res.activityIdeas && res.activityIdeas.length > 0) {
+        const mappedAIActivities: ThematicCuratedActivity[] = res.activityIdeas.map((act, i) => {
+          const matchedCurated = curated[i] || curated[0];
+          return {
+            id: act.activityId || `act-ai-${i + 1}`,
+            title: act.title,
+            duration: act.duration || '45-60 Menit',
+            description: act.description,
+            modality: (act as any).modality || matchedCurated?.modality || 'Eksplorasi Lingkungan',
+            steps: Array.isArray(act.steps) && act.steps.length > 0 ? act.steps : matchedCurated?.steps || [],
+            pedagogicalRationale: (act as any).pedagogicalRationale || matchedCurated?.pedagogicalRationale || 'Bermain bermakna berbasis loose parts dan deep learning.',
+            whyRelevantToTP: (act as any).whyRelevantToTP || `Mendukung ketercapaian ${act.linkedTPIds?.join(', ') || selectedTpIds.join(', ')} dalam tema ${currentTheme.name}`,
+            provocationQuestions: Array.isArray(act.provocationQuestions) && act.provocationQuestions.length > 0 ? act.provocationQuestions : matchedCurated?.provocationQuestions || ['Apa yang ingin kamu buat hari ini?'],
+            primaryMaterials: Array.isArray(act.materials) ? act.materials : (typeof act.materials === 'string' ? [act.materials] : matchedCurated?.primaryMaterials || ['Bahan alam']),
+            localLooseParts: (act as any).localLooseParts || matchedCurated?.localLooseParts || ['Loose parts lokal'],
+            materialAlternatives: matchedCurated?.materialAlternatives || [],
+            tarlAdjustments: act.tarlAdjustments ? {
+              perluDukungan: act.tarlAdjustments.beginner,
+              berkembang: act.tarlAdjustments.intermediate,
+              pengayaan: act.tarlAdjustments.advanced,
+            } : matchedCurated?.tarlAdjustments || { perluDukungan: '', berkembang: '', pengayaan: '' },
+            observableIndicators: (act.assessmentIndicators && act.assessmentIndicators.length > 0)
+              ? act.assessmentIndicators.map((ind: any) => ({
+                  aspect: ind.aspect as DevelopmentalAspect,
+                  aspectLabel: ASPECT_LABELS[ind.aspect as DevelopmentalAspect] || 'Literasi & STEAM',
+                  observableBehavior: ind.text,
+                  rubric: ind.rubric || { BB: '', MB: '', BSH: '', BSB: '' },
+                }))
+              : matchedCurated?.observableIndicators || [],
+            documentationFocus: (act as any).documentationFocus || matchedCurated?.documentationFocus || 'Dokumentasi eksplorasi anak secara autentik',
+            linkedCPIds: act.linkedCPIds && act.linkedCPIds.length > 0 ? act.linkedCPIds : selectedCpIds,
+            linkedTPIds: act.linkedTPIds && act.linkedTPIds.length > 0 ? act.linkedTPIds : selectedTpIds,
+            linkedObjectiveIds: act.linkedObjectiveIds,
+          };
+        });
+        setAiGeneratedActivities(mappedAIActivities);
+        setAvailableActivities(mappedAIActivities);
+        setActivitySourceMode('AI_RECOMMENDATION');
+        selectAndInitActivity(mappedAIActivities[0]);
+      } else if (res.curatedActivityOptions && res.curatedActivityOptions.length > 0) {
         setAvailableActivities(res.curatedActivityOptions);
+        setActivitySourceMode('STATIC_CURATED');
         selectAndInitActivity(res.curatedActivityOptions[0]);
       }
     } catch (err) {
@@ -226,13 +312,111 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
     }
   };
 
+  const runGenerateIndicators = async (
+    activityOverride?: ThematicCuratedActivity,
+    customTitleOverride?: string,
+    customMaterialsOverride?: string
+  ) => {
+    setIsLoadingIndicators(true);
+    const act = activityOverride || chosenActivity;
+    const title = customTitleOverride !== undefined ? customTitleOverride : (customTitle || act?.title || 'Bermain Eksplorasi');
+    const materials = customMaterialsOverride !== undefined ? customMaterialsOverride : customMaterials;
+
+    const chosenTps = allTPs.filter((t) => selectedTpIds.includes(t.id));
+    const tpText = customTpText.trim() || (
+      chosenTps.length > 0
+        ? chosenTps.map((t) => `${t.code} - ${t.title}: ${t.description}`).join('; ')
+        : 'Mengeksplorasi kegiatan bermain bermakna'
+    );
+    const actContext = `${materials ? `Bahan: ${materials}. ` : ''}${act?.description || ''}`.trim();
+
+    try {
+      const response = await generateDevelopmentIndicators({
+        learningObjective: tpText,
+        activity: title,
+        ageGroup,
+        activityContext: actContext,
+        theme: currentTheme?.name,
+        subtheme: currentSubtheme?.name,
+      });
+
+      const formattedIndicators: IndicatorItem[] = response.indicators.map((ind, idx) => ({
+        id: `ind-${Date.now()}-${idx}`,
+        aspect: ind.aspect,
+        aspectId: ind.aspect,
+        aspectLabel: ind.aspectLabel || (ind.aspect ? ASPECT_LABELS[ind.aspect] : 'Perkembangan'),
+        text: ind.text,
+        observableBehavior: ind.observableBehavior,
+        isRelevant: true,
+        rubric: ind.rubric,
+        learningObjective: tpText,
+        activityContext: actContext,
+        ageGroup,
+        rating: 'BELUM_DINILAI',
+      }));
+
+      setCurrentIndicators(formattedIndicators);
+      setNonFocusAspects(response.nonFocusAspects || []);
+      setPedagogicalAdvice(response.pedagogicalAdvice || '');
+    } catch (err) {
+      console.warn('Error generating development indicators:', err);
+    } finally {
+      setIsLoadingIndicators(false);
+    }
+  };
+
+  const handleUpdateIndicator = (id: string, text: string, behavior?: string) => {
+    setCurrentIndicators((prev) =>
+      prev.map((ind) =>
+        ind.id === id ? { ...ind, text, observableBehavior: behavior || ind.observableBehavior } : ind
+      )
+    );
+  };
+
+  const handleDeleteIndicator = (id: string) => {
+    setCurrentIndicators((prev) => prev.filter((ind) => ind.id !== id));
+  };
+
+  const handleAddCustomIndicator = (aspect: DevelopmentalAspect, text: string, behavior: string) => {
+    const newInd: IndicatorItem = {
+      id: `ind-custom-${Date.now()}`,
+      aspect,
+      aspectId: aspect,
+      aspectLabel: ASPECT_LABELS[aspect] || aspect,
+      text,
+      observableBehavior: behavior,
+      isRelevant: true,
+      rubric: {
+        BB: 'Belum menunjukkan kemampuan secara mandiri.',
+        MB: 'Mulai menunjukkan kemampuan dengan dorongan guru.',
+        BSH: 'Mampu menunjukkan kemampuan secara mandiri dan teratur.',
+        BSB: 'Sangat terampil, percaya diri, dan mampu membimbing teman.',
+      },
+      learningObjective: customTpText.trim() || 'Tujuan pembelajaran kegiatan',
+      ageGroup,
+      rating: 'BELUM_DINILAI',
+    };
+    setCurrentIndicators((prev) => [...prev, newInd]);
+  };
+
+  const handlePromoteNonFocusAspect = (aspect: DevelopmentalAspect) => {
+    setNonFocusAspects((prev) => prev.filter((item) => item.aspect !== aspect));
+    handleAddCustomIndicator(
+      aspect,
+      `Anak menunjukkan kemampuan pada aspek ${ASPECT_LABELS[aspect]} selama kegiatan "${customTitle || chosenActivity?.title || 'bermain'}"`,
+      `Perilaku terkait ${ASPECT_LABELS[aspect]} teramati secara nyata.`
+    );
+  };
+
   // Step 6: Save & Connect to Assessment
   const handleSaveAndStartObservation = (immediatelyObserve: boolean = false) => {
     if (!chosenActivity || !currentTheme) return;
 
     // Resolve CP, ATP, TP
-    const matchedCp = allCPs.find((c) => c.id === selectedCpId) || allCPs[0];
-    const matchedTp = allTPs.find((t) => t.id === selectedTpId) || allTPs[0];
+    const chosenCps = allCPs.filter((c) => selectedCpIds.includes(c.id));
+    const matchedCp = chosenCps[0] || allCPs[0];
+    const chosenTps = allTPs.filter((t) => selectedTpIds.includes(t.id));
+    const matchedTp = chosenTps[0] || allTPs[0];
 
     // Format new activity preset for curriculumStore
     const newPresetId = `act-${Date.now()}`;
@@ -242,11 +426,16 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
       category: matchedCp?.elementId || 'DASAR_LITERASI_STEAM',
       description: chosenActivity.description,
       iconName: 'Sparkles',
-      cp: matchedCp ? `${matchedCp.code} - ${matchedCp.title}` : chosenActivity.pedagogicalRationale,
-      tp: matchedTp ? `${matchedTp.code} - ${matchedTp.title}` : chosenActivity.whyRelevantToTP,
+      cp: chosenCps.length > 0 ? chosenCps.map(c => `${c.code} - ${c.title}`).join('; ') : (matchedCp ? `${matchedCp.code} - ${matchedCp.title}` : chosenActivity.pedagogicalRationale),
+      tp: customTpText.trim() || (chosenTps.length > 0 ? chosenTps.map(t => `${t.code} - ${t.title}`).join('; ') : chosenActivity.whyRelevantToTP),
       elementId: matchedCp?.elementId,
       cpId: matchedCp?.id,
       tpId: matchedTp?.id,
+      linkedCPIds: selectedCpIds,
+      selectedCPs: chosenCps,
+      linkedTPIds: selectedTpIds,
+      selectedTPs: chosenTps,
+      linkedObjectiveIds: chosenActivity.linkedObjectiveIds || [],
       themeId: currentTheme.id,
       subthemeId: currentSubtheme?.id,
       theme: currentTheme.name,
@@ -264,15 +453,19 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
       materialAlternatives: chosenActivity.materialAlternatives,
       modality: chosenActivity.modality,
       documentationFocus: chosenActivity.documentationFocus,
-      indicators: chosenActivity.observableIndicators.map((ind, idx) => ({
-        id: `ind-${Date.now()}-${idx}`,
-        aspect: ind.aspect,
-        aspectId: ind.aspect,
-        aspectLabel: ind.aspectLabel,
-        text: ind.observableBehavior,
-        rating: 'BELUM_DINILAI',
-        rubric: ind.rubric,
-      })),
+      indicators: currentIndicators.length > 0
+        ? currentIndicators
+        : chosenActivity.observableIndicators.map((ind, idx) => ({
+            id: `ind-${Date.now()}-${idx}`,
+            aspect: ind.aspect,
+            aspectId: ind.aspect,
+            aspectLabel: ind.aspectLabel,
+            text: ind.observableBehavior,
+            rating: 'BELUM_DINILAI',
+            rubric: ind.rubric,
+          })),
+      nonFocusAspects: nonFocusAspects,
+      pedagogicalAdvice: pedagogicalAdvice,
     };
 
     // Save to curriculumStore
@@ -291,9 +484,9 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
   const stepsList = [
     { num: 1, label: 'Pilih Tema' },
     { num: 2, label: 'Pilih Subtema' },
-    { num: 3, label: 'Konfirmasi CP & TP' },
-    { num: 4, label: 'Saran AI (3-5 Opsi)' },
-    { num: 5, label: 'Pilih & Sesuaikan' },
+    { num: 3, label: 'Tujuan Pembelajaran' },
+    { num: 4, label: 'Saran Kegiatan' },
+    { num: 5, label: 'Indikator AI 6 Aspek' },
     { num: 6, label: 'Siap Asesmen' },
   ];
 
@@ -594,34 +787,119 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                 Konfirmasi Capaian Pembelajaran (CP) & Tujuan Pembelajaran (TP)
               </h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                Pilih rumusan CP dan TP resmi yang ingin dijadikan fokus tujuan pada kegiatan bermain ini.
+                Guru dapat memilih 1 atau lebih CP sekaligus (termasuk lintas elemen), serta 1 atau lebih TP konkret yang menjadi fokus tujuan kegiatan ini.
               </p>
             </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* CP Selection */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              {/* CP Selection (Multi-CP Support) */}
               <div className="space-y-3">
-                <label className="text-xs font-bold text-slate-700 block">
-                  Capaian Pembelajaran (CP) Fase Fondasi:
-                </label>
-                <div className="space-y-2">
-                  {allCPs.map((cp) => {
-                    const isSelected = cp.id === selectedCpId;
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 block">
+                    Capaian Pembelajaran (CP) - Pilih 1 atau Lebih:
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-full bg-emerald-100 text-emerald-800 text-[10px] font-bold">
+                      {selectedCpIds.length} CP Terpilih
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (selectedCpIds.length === allCPs.length) {
+                          setSelectedCpIds(['cp-03']);
+                        } else {
+                          setSelectedCpIds(allCPs.map((c) => c.id));
+                        }
+                      }}
+                      className="text-[10px] font-bold text-emerald-700 hover:text-emerald-900 underline cursor-pointer"
+                    >
+                      {selectedCpIds.length === allCPs.length ? 'Pilih Utama' : 'Pilih Semua CP'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* Selected CPs badge preview */}
+                <div className="flex flex-wrap gap-1.5 p-2 bg-slate-100/70 rounded-xl border border-slate-200 text-xs">
+                  <span className="text-[10px] font-bold text-slate-500 mr-1 self-center">CP Terpilih:</span>
+                  {Array.from(new Set(selectedCpIds)).map((cId, idx) => {
+                    const found = uniqueCPs.find((c) => c.id === cId);
+                    return (
+                      <span
+                        key={`sel-cp-${cId}-${idx}`}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-emerald-700 text-white text-[10px] font-bold shadow-2xs"
+                      >
+                        <span>{found?.code || cId}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (selectedCpIds.length <= 1) {
+                              showToast('Minimal 1 Capaian Pembelajaran (CP) harus tetap dipilih.');
+                              return;
+                            }
+                            setSelectedCpIds((prev) => prev.filter((id) => id !== cId));
+                          }}
+                          className="hover:text-red-200 text-white font-bold ml-0.5"
+                          title="Hapus pilihan CP ini"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                  {uniqueCPs.map((cp, idx) => {
+                    const isSelected = selectedCpIds.includes(cp.id);
                     return (
                       <button
-                        key={cp.id}
-                        onClick={() => setSelectedCpId(cp.id)}
-                        className={`w-full p-4 rounded-2xl text-left border transition-all cursor-pointer ${
+                        key={`btn-cp-${cp.id}-${idx}`}
+                        type="button"
+                        onClick={() => {
+                          setSelectedCpIds((prev) => {
+                            if (prev.includes(cp.id)) {
+                              if (prev.length <= 1) {
+                                showToast('Minimal 1 Capaian Pembelajaran (CP) harus tetap dipilih.');
+                                return prev;
+                              }
+                              return prev.filter((id) => id !== cp.id);
+                            } else {
+                              // When adding a new CP, also ensure at least one of its TPs is available
+                              const matchingTp = allTPs.find((t) => t.cpId === cp.id);
+                              if (matchingTp && !selectedTpIds.includes(matchingTp.id)) {
+                                setSelectedTpIds((tpPrev) => [...tpPrev, matchingTp.id]);
+                              }
+                              return [...prev, cp.id];
+                            }
+                          });
+                        }}
+                        className={`w-full p-3.5 rounded-2xl text-left border transition-all cursor-pointer ${
                           isSelected
-                            ? 'bg-emerald-50/70 border-emerald-500 ring-2 ring-emerald-500/20'
-                            : 'bg-white border-slate-200 hover:border-slate-300'
+                            ? 'bg-emerald-50/80 border-emerald-500 ring-2 ring-emerald-500/20 shadow-xs'
+                            : 'bg-white border-slate-200 hover:border-slate-300 opacity-90'
                         }`}
                       >
                         <div className="flex items-center justify-between mb-1">
-                          <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
-                            {cp.code}
-                          </span>
-                          {isSelected && <CheckCircle2 className="w-4 h-4 text-emerald-600" />}
+                          <div className="flex items-center gap-2">
+                            <div
+                              className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                                isSelected
+                                  ? 'bg-emerald-600 text-white'
+                                  : 'border border-slate-300 bg-slate-50 text-transparent'
+                              }`}
+                            >
+                              ✓
+                            </div>
+                            <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded-md">
+                              {cp.code}
+                            </span>
+                          </div>
+                          {isSelected && (
+                            <span className="text-[10px] font-bold text-emerald-700 bg-emerald-100/80 px-2 py-0.5 rounded-full">
+                              Terpilih
+                            </span>
+                          )}
                         </div>
                         <h4 className="font-bold text-xs text-slate-900">{cp.title}</h4>
                         <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
@@ -633,31 +911,122 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                 </div>
               </div>
 
-              {/* TP Selection */}
+              {/* TP Selection (Multi-TP Support Across Selected CPs) */}
               <div className="space-y-3">
-                <label className="text-xs font-bold text-slate-700 block">
-                  Tujuan Pembelajaran (TP) Konkret:
-                </label>
-                <div className="space-y-2">
-                  {allTPs
-                    .filter((tp) => tp.cpId === selectedCpId)
-                    .map((tp) => {
-                      const isSelected = tp.id === selectedTpId;
+                <div className="flex items-center justify-between">
+                  <label className="text-xs font-bold text-slate-700 block">
+                    Tujuan Pembelajaran (TP) Konkret (Pilih 1 atau Lebih):
+                  </label>
+                  <div className="flex items-center gap-2">
+                    <span className="px-2 py-0.5 rounded-full bg-teal-100 text-teal-800 text-[10px] font-bold">
+                      {selectedTpIds.length} TP Terpilih
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        const availableTps = allTPs.filter((tp) => selectedCpIds.includes(tp.cpId)).map((t) => t.id);
+                        setSelectedTpIds((prev) => {
+                          const allSelected = availableTps.every((id) => prev.includes(id));
+                          if (allSelected) {
+                            const remaining = prev.filter((id) => !availableTps.includes(id));
+                            return remaining.length > 0 ? remaining : [availableTps[0]];
+                          } else {
+                            return Array.from(new Set([...prev, ...availableTps]));
+                          }
+                        });
+                      }}
+                      className="text-[10px] font-bold text-teal-700 hover:text-teal-900 underline cursor-pointer"
+                    >
+                      Pilih Semua TP Terkait
+                    </button>
+                  </div>
+                </div>
+
+                {/* Selected TPs badge preview */}
+                <div className="flex flex-wrap gap-1.5 p-2 bg-slate-100/70 rounded-xl border border-slate-200 text-xs">
+                  <span className="text-[10px] font-bold text-slate-500 mr-1 self-center">Fokus Terpilih:</span>
+                  {Array.from(new Set(selectedTpIds)).map((tId, idx) => {
+                    const found = uniqueTPs.find((t) => t.id === tId);
+                    return (
+                      <span
+                        key={`sel-tp-${tId}-${idx}`}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-teal-600 text-white text-[10px] font-bold shadow-2xs"
+                      >
+                        <span>{found?.code || tId}</span>
+                        <button
+                          type="button"
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            if (selectedTpIds.length <= 1) {
+                              showToast('Minimal 1 TP harus tetap dipilih.');
+                              return;
+                            }
+                            setSelectedTpIds((prev) => prev.filter((id) => id !== tId));
+                          }}
+                          className="hover:text-red-200 text-white font-bold ml-0.5"
+                          title="Hapus pilihan TP ini"
+                        >
+                          ×
+                        </button>
+                      </span>
+                    );
+                  })}
+                </div>
+
+                <div className="space-y-2 max-h-[380px] overflow-y-auto pr-1">
+                  {uniqueTPs
+                    .filter((tp) => selectedCpIds.includes(tp.cpId))
+                    .map((tp, idx) => {
+                      const isSelected = selectedTpIds.includes(tp.id);
+                      const parentCp = uniqueCPs.find((c) => c.id === tp.cpId);
                       return (
                         <button
-                          key={tp.id}
-                          onClick={() => setSelectedTpId(tp.id)}
-                          className={`w-full p-4 rounded-2xl text-left border transition-all cursor-pointer ${
+                          key={`btn-tp-${tp.id}-${idx}`}
+                          type="button"
+                          onClick={() => {
+                            setSelectedTpIds((prev) => {
+                              if (prev.includes(tp.id)) {
+                                if (prev.length <= 1) {
+                                  showToast('Minimal 1 Tujuan Pembelajaran (TP) harus dipilih.');
+                                  return prev;
+                                }
+                                return prev.filter((id) => id !== tp.id);
+                              } else {
+                                return [...prev, tp.id];
+                              }
+                            });
+                          }}
+                          className={`w-full p-3.5 rounded-2xl text-left border transition-all cursor-pointer ${
                             isSelected
-                              ? 'bg-teal-50/70 border-teal-500 ring-2 ring-teal-500/20'
+                              ? 'bg-teal-50/90 border-teal-500 ring-2 ring-teal-500/20 shadow-xs'
                               : 'bg-white border-slate-200 hover:border-slate-300'
                           }`}
                         >
                           <div className="flex items-center justify-between mb-1">
-                            <span className="text-[11px] font-bold text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md">
-                              {tp.code}
-                            </span>
-                            {isSelected && <CheckCircle2 className="w-4 h-4 text-teal-600" />}
+                            <div className="flex items-center gap-2">
+                              <div
+                                className={`w-4 h-4 rounded-md flex items-center justify-center text-[10px] font-bold ${
+                                  isSelected
+                                    ? 'bg-teal-600 text-white'
+                                    : 'border border-slate-300 bg-slate-50 text-transparent'
+                                }`}
+                              >
+                                ✓
+                              </div>
+                              <span className="text-[11px] font-bold text-teal-800 bg-teal-100 px-2 py-0.5 rounded-md">
+                                {tp.code}
+                              </span>
+                              {parentCp && (
+                                <span className="text-[10px] font-semibold text-slate-500 bg-slate-100 px-1.5 py-0.5 rounded">
+                                  {parentCp.code}
+                                </span>
+                              )}
+                            </div>
+                            {isSelected && (
+                              <span className="text-[10px] font-bold text-teal-700 bg-teal-100/80 px-2 py-0.5 rounded-full">
+                                Terpilih
+                              </span>
+                            )}
                           </div>
                           <h4 className="font-bold text-xs text-slate-900">{tp.title}</h4>
                           <p className="text-[11px] text-slate-500 mt-1 line-clamp-2 leading-relaxed">
@@ -666,6 +1035,23 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                         </button>
                       );
                     })}
+                </div>
+
+                {/* Custom / Customized TP Input */}
+                <div className="mt-3 p-3.5 bg-slate-50 rounded-2xl border border-slate-200 space-y-2">
+                  <label className="text-[11px] font-bold text-slate-700 block">
+                    Atau Tambahkan Catatan/Penyesuaian Kalimat TP Khusus:
+                  </label>
+                  <input
+                    type="text"
+                    value={customTpText}
+                    onChange={(e) => setCustomTpText(e.target.value)}
+                    placeholder="Contoh: Anak dapat mengeksplorasi dan menyusun bahan alam menjadi karya kreatif..."
+                    className="w-full px-3.5 py-2 text-xs bg-white border border-slate-300 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 text-slate-800"
+                  />
+                  <p className="text-[10px] text-slate-400">
+                    Opsional. Jika diisi, kalimat ini akan disandingkan dengan {selectedTpIds.length} TP terpilih saat menghasilkan indikator AI.
+                  </p>
                 </div>
               </div>
             </div>
@@ -717,6 +1103,127 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
               </button>
             </div>
 
+            {/* Kesesuaian Pembelajaran & Hierarki Kurikulum (Traceability Banner) */}
+            <div className="p-4 bg-gradient-to-r from-emerald-50 via-teal-50 to-slate-50 rounded-2xl border border-emerald-200/80 space-y-2.5">
+              <div className="flex items-center justify-between">
+                <span className="text-[11px] font-bold text-emerald-900 uppercase tracking-wider flex items-center gap-1.5">
+                  <span className="w-2 h-2 rounded-full bg-emerald-600"></span>
+                  Kesesuaian Pembelajaran (Hierarki Terpilih Guru):
+                </span>
+                <span className="text-[10px] font-bold text-slate-500 bg-white/80 px-2 py-0.5 rounded-full border border-slate-200">
+                  {selectedCpIds.length} CP • {selectedTpIds.length} TP
+                </span>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                <span className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 font-bold text-slate-800 shadow-2xs">
+                  🌸 {currentTheme?.name} {currentSubtheme?.name ? `(${currentSubtheme.name})` : ''}
+                </span>
+                <span className="text-slate-400 font-bold">→</span>
+                {uniqueCPs
+                  .filter((c) => selectedCpIds.includes(c.id))
+                  .map((cp, idx) => (
+                    <span
+                      key={`preview-cp-${cp.id}-${idx}`}
+                      className="px-2 py-0.5 rounded-md bg-emerald-100 text-emerald-900 border border-emerald-300 font-bold text-[11px]"
+                      title={`${cp.code}: ${cp.description}`}
+                    >
+                      {cp.code}
+                    </span>
+                  ))}
+                <span className="text-slate-400 font-bold">→</span>
+                {uniqueTPs
+                  .filter((t) => selectedTpIds.includes(t.id))
+                  .map((tp, idx) => (
+                    <span
+                      key={`preview-tp-${tp.id}-${idx}`}
+                      className="px-2 py-0.5 rounded-md bg-teal-100 text-teal-900 border border-teal-300 font-bold text-[11px]"
+                      title={`${tp.code}: ${tp.description}`}
+                    >
+                      {tp.code}
+                    </span>
+                  ))}
+              </div>
+
+              {/* Specific Learning Objectives if provided by AI */}
+              {aiResult?.learningObjectives && aiResult.learningObjectives.length > 0 && (
+                <div className="pt-2 border-t border-emerald-200/60">
+                  <span className="text-[10px] font-bold text-emerald-900 block mb-1">
+                    Tujuan Pembelajaran Spesifik (Ditranslasikan dari CP & TP):
+                  </span>
+                  <div className="flex flex-wrap gap-1.5">
+                    {aiResult.learningObjectives.map((obj) => (
+                      <span
+                        key={obj.objectiveId}
+                        className="px-2.5 py-1 bg-white text-slate-800 border border-emerald-200 rounded-lg text-[10px] font-medium shadow-2xs leading-tight"
+                      >
+                        <strong className="text-emerald-700 font-bold mr-1">{obj.objectiveId}:</strong>
+                        {obj.objectiveText || (obj as any).description}
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Source Mode Switcher & Clarification Badge */}
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 p-3 rounded-2xl bg-white border border-slate-200 shadow-2xs">
+              <div className="flex items-center gap-2">
+                {activitySourceMode === 'AI_RECOMMENDATION' ? (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-emerald-100 text-emerald-900 font-bold text-xs border border-emerald-300">
+                    <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+                    <span>Rekomendasi Kontekstual AI (Gemini)</span>
+                  </span>
+                ) : (
+                  <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full bg-blue-100 text-blue-900 font-bold text-xs border border-blue-300">
+                    <Package className="w-3.5 h-3.5 text-blue-600" />
+                    <span>Preset Kurasi Tematik GrowUPAUD</span>
+                  </span>
+                )}
+                <span className="text-[11px] text-slate-500">
+                  {activitySourceMode === 'AI_RECOMMENDATION'
+                    ? 'Dirancang dinamis sesuai subtema, diferensiasi TaRL, dan loose parts lokal.'
+                    : 'Disusun tim kurator pedagogis PAUD Fase Fondasi.'}
+                </span>
+              </div>
+
+              {/* Toggle buttons if both are available */}
+              {aiGeneratedActivities.length > 0 && staticCuratedActivities.length > 0 && (
+                <div className="flex items-center gap-1 self-end sm:self-auto shrink-0">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAvailableActivities(aiGeneratedActivities);
+                      setActivitySourceMode('AI_RECOMMENDATION');
+                      selectAndInitActivity(aiGeneratedActivities[0]);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                      activitySourceMode === 'AI_RECOMMENDATION'
+                        ? 'bg-emerald-700 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    AI Contextual ({aiGeneratedActivities.length})
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAvailableActivities(staticCuratedActivities);
+                      setActivitySourceMode('STATIC_CURATED');
+                      selectAndInitActivity(staticCuratedActivities[0]);
+                    }}
+                    className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition cursor-pointer ${
+                      activitySourceMode === 'STATIC_CURATED'
+                        ? 'bg-blue-700 text-white shadow-xs'
+                        : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                    }`}
+                  >
+                    Preset Kurasi ({staticCuratedActivities.length})
+                  </button>
+                </div>
+              )}
+            </div>
+
             {isLoadingAI ? (
               <div className="py-16 text-center space-y-3 bg-slate-50 rounded-3xl border border-slate-200">
                 <RefreshCw className="w-8 h-8 text-emerald-600 animate-spin mx-auto" />
@@ -727,7 +1234,7 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
               </div>
             ) : (
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {availableActivities.map((act, idx) => {
+                {availableActivities.map((act) => {
                   const isSelected = chosenActivity?.id === act.id;
 
                   return (
@@ -758,11 +1265,62 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                           </p>
                         </div>
 
-                        {/* Relevansi ke TP */}
-                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 text-[11px] text-slate-700 space-y-1">
-                          <strong className="text-emerald-800 font-bold block">Relevansi dengan TP:</strong>
-                          <p className="leading-relaxed">{act.whyRelevantToTP}</p>
+                        {/* Kesesuaian ke CP & TP */}
+                        <div className="p-3 bg-slate-50 rounded-2xl border border-slate-200/80 text-[11px] text-slate-700 space-y-2">
+                          <div className="flex flex-wrap items-center gap-1.5">
+                            <span className="text-[10px] font-bold text-emerald-800 bg-emerald-50 px-2 py-0.5 rounded-md border border-emerald-200">
+                              CP:
+                            </span>
+                            {Array.from(new Set(act.linkedCPIds && act.linkedCPIds.length > 0 ? act.linkedCPIds : selectedCpIds)).map((cId, idx) => {
+                              const cpObj = uniqueCPs.find((c) => c.id === cId);
+                              return (
+                                <span
+                                  key={`act-cp-${act.id}-${cId}-${idx}`}
+                                  className="px-1.5 py-0.5 rounded-md bg-white text-emerald-900 border border-emerald-200 text-[10px] font-bold"
+                                  title={cpObj?.title}
+                                >
+                                  {cpObj?.code || cId}
+                                </span>
+                              );
+                            })}
+                            <span className="text-[10px] font-bold text-teal-800 bg-teal-50 px-2 py-0.5 rounded-md border border-teal-200 ml-1">
+                              TP:
+                            </span>
+                            {Array.from(new Set(act.linkedTPIds && act.linkedTPIds.length > 0 ? act.linkedTPIds : selectedTpIds)).map((tId, idx) => {
+                              const tpObj = uniqueTPs.find((t) => t.id === tId);
+                              return (
+                                <span
+                                  key={`act-tp-${act.id}-${tId}-${idx}`}
+                                  className="px-1.5 py-0.5 rounded-md bg-white text-slate-800 border border-slate-300 text-[10px] font-bold shadow-2xs"
+                                  title={tpObj?.title}
+                                >
+                                  {tpObj?.code || tId}
+                                </span>
+                              );
+                            })}
+                            {act.linkedObjectiveIds && act.linkedObjectiveIds.length > 0 && (
+                              <span className="px-1.5 py-0.5 rounded-md bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-bold ml-1">
+                                Obj: {act.linkedObjectiveIds.join(', ')}
+                              </span>
+                            )}
+                          </div>
+                          <div>
+                            <strong className="text-emerald-800 font-bold block mb-0.5">Relevansi Pedagogis:</strong>
+                            <p className="leading-relaxed">{act.whyRelevantToTP}</p>
+                          </div>
                         </div>
+
+                        {/* Integrasi Literasi Naratif / Alami (Anti-Worksheet) */}
+                        {act.literacyIntegration && (
+                          <div className="p-2.5 bg-amber-50/70 rounded-xl border border-amber-200/80 text-[11px] text-amber-900 space-y-0.5">
+                            <span className="text-[10px] font-bold text-amber-800 uppercase tracking-wider flex items-center gap-1">
+                              📖 Integrasi Bahasa & Literasi Alami (Tanpa Lembar Kerja):
+                            </span>
+                            <p className="leading-relaxed text-amber-950 font-medium">
+                              {act.literacyIntegration}
+                            </p>
+                          </div>
+                        )}
 
                         {/* Pertanyaan Pemantik Sample */}
                         <div className="space-y-1">
@@ -782,6 +1340,7 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                         <button
                           onClick={() => {
                             selectAndInitActivity(act);
+                            runGenerateIndicators(act, act.title, [...act.primaryMaterials, ...act.localLooseParts].join(', '));
                             setCurrentStep(5);
                           }}
                           className={`px-4 py-2 rounded-xl text-xs font-bold transition flex items-center gap-1.5 cursor-pointer ${
@@ -791,7 +1350,7 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                           }`}
                         >
                           <Check className="w-3.5 h-3.5" />
-                          <span>Pilih Ide Ini & Lanjut</span>
+                          <span>Pilih & Analisis Indikator AI</span>
                         </button>
                       </div>
                     </div>
@@ -807,152 +1366,45 @@ export const LightweightLessonPlanner: React.FC<LightweightLessonPlannerProps> =
                 className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center gap-2 cursor-pointer"
               >
                 <ChevronLeft className="w-4 h-4" />
-                <span>Kembali ke CP & TP</span>
+                <span>Kembali ke TP</span>
               </button>
             </div>
           </div>
         )}
 
-        {/* ===================== LANGKAH 5: GURU MEMILIH & PENYESUAIAN RINGAN ===================== */}
+        {/* ===================== LANGKAH 5: INDIKATOR PERKEMBANGAN 6 ASPEK & RUBRIK AI ===================== */}
         {currentStep === 5 && chosenActivity && (
-          <div className="space-y-5 animate-fadeIn">
-            <div>
-              <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                <span className="w-6 h-6 rounded-lg bg-emerald-100 text-emerald-700 flex items-center justify-center text-xs font-bold">5</span>
-                Penyesuaian Ringan Kegiatan
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Sesuaikan bahan lokal yang tersedia di sekolah Anda dan tambahkan pertanyaan pemantik jika diperlukan.
-              </p>
-            </div>
-
-            {/* Summary Banner of Selected Activity */}
-            <div className="bg-emerald-50/60 p-5 rounded-3xl border border-emerald-200/90 space-y-3">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <div className="flex items-center gap-2">
-                  <span className="text-xs font-bold text-emerald-800 bg-emerald-200/80 px-2.5 py-1 rounded-full uppercase">
-                    {chosenActivity.modality}
-                  </span>
-                  <span className="text-xs text-slate-500 font-semibold">
-                    Durasi: {chosenActivity.duration}
-                  </span>
-                </div>
-                <button
-                  onClick={() => setCurrentStep(4)}
-                  className="text-xs font-bold text-emerald-700 hover:text-emerald-800 underline cursor-pointer"
-                >
-                  Ganti Ide Lain
-                </button>
-              </div>
-
-              {/* Title input */}
-              <div>
-                <label className="text-xs font-bold text-slate-700 block mb-1">Judul Kegiatan Pembelajaran:</label>
-                <input
-                  type="text"
-                  value={customTitle}
-                  onChange={(e) => setCustomTitle(e.target.value)}
-                  className="w-full px-4 py-2.5 text-xs font-bold bg-white border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500"
-                />
-              </div>
-
-              {/* Description */}
-              <p className="text-xs text-slate-700 leading-relaxed">
-                {chosenActivity.description}
-              </p>
-            </div>
-
-            {/* Editable sections: Materials, Provocations, TaRL */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              {/* Media & Loose Parts */}
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
-                <label className="text-xs font-bold text-slate-800 flex items-center gap-2">
-                  <Package className="w-4 h-4 text-emerald-600" />
-                  Media & Loose Parts Lokal (Bisa Diedit):
-                </label>
-                <textarea
-                  rows={4}
-                  value={customMaterials}
-                  onChange={(e) => setCustomMaterials(e.target.value)}
-                  className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-emerald-500 leading-relaxed"
-                  placeholder="Pisahkan dengan tanda koma..."
-                />
-                <span className="text-[11px] text-slate-400 block">
-                  Tip: Manfaatkan daun gugur, batu kali, kardus kemasan, atau potongan kain perca.
-                </span>
-              </div>
-
-              {/* Provocation Questions */}
-              <div className="bg-white p-5 rounded-3xl border border-slate-200 space-y-3">
-                <label className="text-xs font-bold text-slate-800 flex items-center gap-2">
-                  <HelpCircle className="w-4 h-4 text-teal-600" />
-                  Pertanyaan Pemantik (Satu per baris):
-                </label>
-                <textarea
-                  rows={4}
-                  value={customQuestions}
-                  onChange={(e) => setCustomQuestions(e.target.value)}
-                  className="w-full p-3 text-xs bg-slate-50 border border-slate-200 rounded-xl focus:outline-none focus:ring-2 focus:ring-teal-500 leading-relaxed"
-                  placeholder="Ketik pertanyaan pemantik per baris..."
-                />
-                <span className="text-[11px] text-slate-400 block">
-                  Tip: Ajukan pertanyaan terbuka (HOTS) yang merangsang anak bereksplorasi sendiri.
-                </span>
-              </div>
-            </div>
-
-            {/* TaRL 3-Tier Differentiation Preview */}
-            <div className="bg-slate-50 p-5 rounded-3xl border border-slate-200 space-y-3">
-              <span className="text-xs font-bold text-slate-800 flex items-center gap-2">
-                <Sliders className="w-4 h-4 text-indigo-600" />
-                Panduan Diferensiasi Sesuai Tingkat Kemampuan (TaRL):
-              </span>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div className="p-3.5 bg-amber-50 rounded-2xl border border-amber-200/80 text-[11px] space-y-1">
-                  <strong className="text-amber-900 font-bold block">1. Perlu Dukungan:</strong>
-                  <p className="text-amber-800 leading-relaxed">{chosenActivity.tarlAdjustments.perluDukungan}</p>
-                </div>
-                <div className="p-3.5 bg-blue-50 rounded-2xl border border-blue-200/80 text-[11px] space-y-1">
-                  <strong className="text-blue-900 font-bold block">2. Berkembang (Sesuai Usia):</strong>
-                  <p className="text-blue-800 leading-relaxed">{chosenActivity.tarlAdjustments.berkembang}</p>
-                </div>
-                <div className="p-3.5 bg-emerald-50 rounded-2xl border border-emerald-200/80 text-[11px] space-y-1">
-                  <strong className="text-emerald-900 font-bold block">3. Pengayaan (Tantangan):</strong>
-                  <p className="text-emerald-800 leading-relaxed">{chosenActivity.tarlAdjustments.pengayaan}</p>
-                </div>
-              </div>
-            </div>
-
-            {/* Step 5 Footer & Action Buttons */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pt-4 border-t border-slate-100">
-              <button
-                onClick={() => setCurrentStep(4)}
-                className="px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition flex items-center justify-center gap-2 cursor-pointer"
-              >
-                <ChevronLeft className="w-4 h-4" />
-                <span>Pilih Ide Lain</span>
-              </button>
-
-              <div className="flex flex-col sm:flex-row gap-2">
-                <button
-                  onClick={() => handleSaveAndStartObservation(false)}
-                  className="px-5 py-2.5 bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-2 cursor-pointer"
-                >
-                  <Calendar className="w-4 h-4" />
-                  <span>Simpan ke Bank Rencana</span>
-                </button>
-
-                <button
-                  onClick={() => handleSaveAndStartObservation(true)}
-                  className="px-6 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold text-xs rounded-xl shadow-md shadow-emerald-600/20 transition flex items-center justify-center gap-2 cursor-pointer active:scale-95"
-                >
-                  <ClipboardCheck className="w-4 h-4" />
-                  <span>Gunakan & Catat Observasi Sekarang</span>
-                </button>
-              </div>
-            </div>
-          </div>
+          <AIIndicatorPlannerStep
+            learningObjective={
+              customTpText.trim() ||
+              (allTPs
+                .filter((t) => selectedTpIds.includes(t.id))
+                .map((t) => `${t.code} - ${t.title}`)
+                .join('; ')) ||
+              'Mengeksplorasi kegiatan pembelajaran PAUD'
+            }
+            activityTitle={customTitle}
+            activityDescription={chosenActivity.description}
+            activityMaterials={customMaterials}
+            ageGroup={ageGroup}
+            themeName={currentTheme?.name}
+            subthemeName={currentSubtheme?.name}
+            selectedCPs={allCPs.filter((c) => selectedCpIds.includes(c.id))}
+            selectedTPs={allTPs.filter((t) => selectedTpIds.includes(t.id))}
+            currentIndicators={currentIndicators}
+            nonFocusAspects={nonFocusAspects}
+            pedagogicalAdvice={pedagogicalAdvice}
+            isLoading={isLoadingIndicators}
+            onRegenerate={() => runGenerateIndicators()}
+            onChangeActivityTitle={(val) => setCustomTitle(val)}
+            onChangeMaterials={(val) => setCustomMaterials(val)}
+            onUpdateIndicator={handleUpdateIndicator}
+            onDeleteIndicator={handleDeleteIndicator}
+            onAddCustomIndicator={handleAddCustomIndicator}
+            onPromoteNonFocusAspect={handlePromoteNonFocusAspect}
+            onSave={handleSaveAndStartObservation}
+            onBack={() => setCurrentStep(4)}
+          />
         )}
 
         {/* ===================== LANGKAH 6: SIAP ASESMEN / SUKSES ===================== */}

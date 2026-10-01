@@ -499,19 +499,30 @@ class CurriculumStore {
             }
           });
 
+          // Helper to deduplicate array by id
+          const dedupById = <T extends { id: string }>(items: T[]): T[] => {
+            const map = new Map<string, T>();
+            items.forEach((item) => {
+              if (item && item.id) {
+                map.set(item.id, item);
+              }
+            });
+            return Array.from(map.values());
+          };
+
           // Merge TPs, CPs, ATPs if missing
-          const mergedCPs = parsed.cps && parsed.cps.length >= INITIAL_CPS.length ? parsed.cps : INITIAL_CPS;
-          const mergedATPs = parsed.atps && parsed.atps.length >= INITIAL_ATPS.length ? parsed.atps : INITIAL_ATPS;
-          const mergedTPs = parsed.tps && parsed.tps.length >= INITIAL_TPS.length ? parsed.tps : INITIAL_TPS;
+          const rawCPs = parsed.cps && parsed.cps.length >= INITIAL_CPS.length ? parsed.cps : INITIAL_CPS;
+          const rawATPs = parsed.atps && parsed.atps.length >= INITIAL_ATPS.length ? parsed.atps : INITIAL_ATPS;
+          const rawTPs = parsed.tps && parsed.tps.length >= INITIAL_TPS.length ? parsed.tps : INITIAL_TPS;
 
           return {
             ...parsed,
-            elements: parsed.elements || INITIAL_ELEMENTS,
-            cps: mergedCPs,
-            atps: mergedATPs,
-            tps: mergedTPs,
-            themes: mergedThemes,
-            subthemes: mergedSubthemes,
+            elements: dedupById(parsed.elements || INITIAL_ELEMENTS),
+            cps: dedupById(rawCPs),
+            atps: dedupById(rawATPs),
+            tps: dedupById(rawTPs),
+            themes: dedupById(mergedThemes),
+            subthemes: dedupById(mergedSubthemes),
           };
         }
       }

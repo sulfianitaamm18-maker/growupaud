@@ -32,7 +32,6 @@ import { GuruHeader } from './GuruHeader';
 import { GuruSummaryCards } from './GuruSummaryCards';
 import { GuruQuickActions } from './GuruQuickActions';
 import { GuruAIWidget } from './GuruAIWidget';
-import { TodayScheduleWidget } from './TodayScheduleWidget';
 import { ObservationHistoryView } from './ObservationHistoryView';
 import { GuruReportView } from './GuruReportView';
 import { AIPedagogicWidget } from './AIPedagogicWidget';
@@ -44,7 +43,8 @@ import { GuruCalendarWidget } from './GuruCalendarWidget';
 
 // Functional Modals
 import { GuruNotificationModal } from './GuruNotificationModal';
-import { GuruScheduleModal } from './GuruScheduleModal';
+import { MessagingModal } from '../messaging/MessagingModal';
+import { messagingService } from '../../services/messagingService';
 import { GuruAccountSettingsModal } from './GuruAccountSettingsModal';
 import { GuruStudentPortfolioModal } from './GuruStudentPortfolioModal';
 import { GuruStudentGraphModal } from './GuruStudentGraphModal';
@@ -70,16 +70,40 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
 
   // Modal states
   const [isNotifOpen, setIsNotifOpen] = useState<boolean>(false);
+  const [isMessagingModalOpen, setIsMessagingModalOpen] = useState<boolean>(false);
+  const [messagingInitialTab, setMessagingInitialTab] = useState<'inbox' | 'compose' | 'notifications'>('inbox');
+  const [messagingStudentId, setMessagingStudentId] = useState<string | undefined>(undefined);
+  const [messagingStudentName, setMessagingStudentName] = useState<string | undefined>(undefined);
+  const [messagingRecipientId, setMessagingRecipientId] = useState<string | undefined>(undefined);
+  const [unreadCounts, setUnreadCounts] = useState<{ unreadMessages: number; unreadNotifications: number }>({
+    unreadMessages: 0,
+    unreadNotifications: 0,
+  });
   const [isSettingsOpen, setIsSettingsOpen] = useState<boolean>(false);
-  const [isScheduleOpen, setIsScheduleOpen] = useState<boolean>(false);
   const [isCurriculumOpen, setIsCurriculumOpen] = useState<boolean>(false);
   const [selectedStudentForPortfolio, setSelectedStudentForPortfolio] =
     useState<StudentProfile | null>(null);
   const [selectedStudentForGraph, setSelectedStudentForGraph] =
     useState<StudentProfile | null>(null);
 
-  const { userProfile } = useAuth();
+  const { userProfile, logout } = useAuth();
   const currentUser = userProfile;
+
+  // Poll real unread messages and notifications counts from Firestore
+  useEffect(() => {
+    if (!currentUser) return;
+    const fetchCounts = async () => {
+      try {
+        const counts = await messagingService.getUnreadCounts();
+        setUnreadCounts(counts);
+      } catch (err) {
+        // quiet error
+      }
+    };
+    fetchCounts();
+    const interval = setInterval(fetchCounts, 15000);
+    return () => clearInterval(interval);
+  }, [currentUser]);
 
   // Filter students & observations strictly for this Teacher's assigned class
   const allStudents = useMemo(() => students || schoolStore.getStudents(), [students]);
@@ -91,6 +115,16 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
     () => (currentUser ? observations.filter((o) => canViewObservation(currentUser, o, allStudents)) : []),
     [observations, currentUser, allStudents]
   );
+
+  const studentClassName = useMemo(() => {
+    if (myStudents.length > 0 && myStudents[0].className) {
+      return myStudents[0].className;
+    }
+    if (currentUser?.className) {
+      return currentUser.className;
+    }
+    return 'Kelompok B';
+  }, [myStudents, currentUser]);
 
   // Selected student for portfolio tab with auto-synchronization
   const [selectedPortfolioStudent, setSelectedPortfolioStudent] = useState<StudentProfile | null>(
@@ -172,7 +206,6 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
       section:
         | 'STUDENTS'
         | 'PORTFOLIO'
-        | 'SCHEDULE'
         | 'REPORT'
         | 'CALENDAR'
         | 'ANALYTICS'
@@ -187,8 +220,6 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
         setActiveTab('LAPORAN');
       } else if (section === 'PLANNER') {
         setActiveTab('PERENCANAAN');
-      } else if (section === 'SCHEDULE') {
-        setIsScheduleOpen(true);
       } else {
         setActiveTab('BERANDA');
       }
@@ -243,102 +274,114 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
   }
 
   return (
-    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-12">
-      {/* 1. Header Guru & Identitas Sekolah */}
+    <div className="space-y-6 sm:space-y-8 animate-fadeIn pb-16">
+      {/* 1. Header Hero Guru & Identitas Sekolah */}
       <GuruHeader
         currentUser={currentUser}
         onOpenSettings={() => setIsSettingsOpen(true)}
-        onOpenNotifications={() => setIsNotifOpen(true)}
-        onLogout={() => {
-          alert('Sesi Guru diakhiri dengan aman. Terima kasih, Bu Rina, S.Pd!');
+        onOpenNotifications={() => {
+          setMessagingInitialTab('notifications');
+          setMessagingStudentId(undefined);
+          setMessagingStudentName(undefined);
+          setMessagingRecipientId(undefined);
+          setIsMessagingModalOpen(true);
         }}
-        unreadCount={2}
+        onOpenInbox={() => {
+          setMessagingInitialTab('inbox');
+          setMessagingStudentId(undefined);
+          setMessagingStudentName(undefined);
+          setMessagingRecipientId(undefined);
+          setIsMessagingModalOpen(true);
+        }}
+        unreadCount={unreadCounts.unreadNotifications}
+        unreadMessagesCount={unreadCounts.unreadMessages}
+        onOpenNewObservation={() => onOpenNewObservation()}
       />
 
-      {/* 2. Navigasi Utama 6 Menu Guru PAUD */}
-      <div className="bg-white p-2 rounded-2xl border border-slate-200/90 shadow-xs flex items-center justify-between overflow-x-auto gap-1">
+      {/* 2. Navigasi Menu Guru PAUD (Sesuai gaya Operator & Ortu) */}
+      <div className="bg-white p-2 rounded-2xl shadow-xs border border-slate-200/80 flex items-center gap-1.5 overflow-x-auto">
         <button
           onClick={() => setActiveTab('BERANDA')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'BERANDA'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <LayoutDashboard className="w-4 h-4" />
-          <span>1. Beranda</span>
+          <LayoutDashboard className="w-4 h-4 text-emerald-400" />
+          <span>Dashboard</span>
         </button>
 
         <button
           onClick={() => setActiveTab('ANAK')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'ANAK'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <Users className="w-4 h-4" />
-          <span>2. Anak ({totalStudents})</span>
+          <Users className="w-4 h-4 text-emerald-400" />
+          <span>Data Anak ({totalStudents})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('OBSERVASI')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'OBSERVASI'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <ClipboardCheck className="w-4 h-4" />
-          <span>3. Observasi ({todayObservationsCount})</span>
+          <ClipboardCheck className="w-4 h-4 text-emerald-400" />
+          <span>Observasi ({todayObservationsCount})</span>
         </button>
 
         <button
           onClick={() => setActiveTab('PERENCANAAN')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'PERENCANAAN'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
           <Sparkles className="w-4 h-4 text-amber-300" />
-          <span>4. Perencanaan AI</span>
+          <span>Perencanaan AI</span>
         </button>
 
         <button
           onClick={() => setActiveTab('PORTOFOLIO')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'PORTOFOLIO'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <FolderHeart className="w-4 h-4" />
-          <span>5. Portofolio</span>
+          <FolderHeart className="w-4 h-4 text-rose-400" />
+          <span>Portofolio</span>
         </button>
 
         <button
           onClick={() => setActiveTab('LAPORAN')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'LAPORAN'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <FileText className="w-4 h-4" />
-          <span>6. Laporan</span>
+          <FileText className="w-4 h-4 text-indigo-400" />
+          <span>Rapor Semester</span>
         </button>
 
         <button
           onClick={() => setActiveTab('PENGATURAN')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer ${
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
             activeTab === 'PENGATURAN'
-              ? 'bg-emerald-600 text-white shadow-xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <Settings className="w-4 h-4" />
-          <span>7. Pengaturan</span>
+          <Settings className="w-4 h-4 text-slate-400" />
+          <span>Pengaturan</span>
         </button>
       </div>
 
@@ -346,20 +389,14 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
 
       {/* TAB 1: BERANDA */}
       {activeTab === 'BERANDA' && (
-        <div className="space-y-6 sm:space-y-8 animate-fadeIn">
-          {/* 1. Jadwal Mengajar Hari Ini (Disusun Admin / Penugasan Guru) */}
-          <TodayScheduleWidget
-            onStartObservationForActivity={(actTitle) => onOpenNewObservation(undefined)}
-            onOpenScheduleModal={() => setIsScheduleOpen(true)}
-          />
-
-          {/* 2, 3, 4. Kegiatan & Aksi Cepat Mengajar (Catat Observasi, Tambah Kegiatan) */}
+        <div className="space-y-4 sm:space-y-5 animate-fadeIn">
+          {/* Kegiatan & Aksi Cepat Mengajar (Catat Observasi, Rancang Kegiatan AI, dll.) */}
           <GuruQuickActions
             onOpenNewObservation={() => onOpenNewObservation()}
             onNavigateSection={handleNavigateSection}
           />
 
-          {/* 5. Ringkasan Asesmen yang Benar-Benar Diperlukan */}
+          {/* Ringkasan Asesmen yang Benar-Benar Diperlukan */}
           <GuruSummaryCards
             totalStudents={totalStudents}
             todayObservationsCount={todayObservationsCount}
@@ -369,6 +406,7 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
             uploadedEvidenceCount={uploadedEvidenceCount}
             semesterAssessmentPercentage={semesterAssessmentPercentage}
             onSelectCard={handleSelectSummaryCard}
+            studentClassName={studentClassName}
           />
 
           {/* 6. Saran AI yang Relevan (Rantai Pedagogis: Loose Parts, TaRL, UDL, CRT) */}
@@ -413,6 +451,13 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
             onOpenPortfolio={(student) => setSelectedStudentForPortfolio(student)}
             onOpenGraph={(student) => setSelectedStudentForGraph(student)}
             onOpenReportPreview={onOpenReportPreview}
+            onMessageParent={(student) => {
+              setMessagingInitialTab('compose');
+              setMessagingStudentId(student.id);
+              setMessagingStudentName(student.name);
+              setMessagingRecipientId(undefined);
+              setIsMessagingModalOpen(true);
+            }}
           />
         </div>
       )}
@@ -617,9 +662,13 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
         </div>
       )}
 
-      {/* TAB 5: LAPORAN */}
+      {/* TAB 6: LAPORAN SEMESTER & HARIAN */}
       {activeTab === 'LAPORAN' && (
-        <GuruReportView onOpenReportPreview={onOpenReportPreview} />
+        <GuruReportView
+          students={myStudents}
+          observations={myObservations}
+          onOpenReportPreview={onOpenReportPreview}
+        />
       )}
 
       {/* TAB 6: PENGATURAN */}
@@ -695,21 +744,38 @@ export const GuruDashboard: React.FC<GuruDashboardProps> = ({
 
       {/* -------------------- Functional Modals -------------------- */}
 
-      {/* Notification Center */}
-      <GuruNotificationModal
-        isOpen={isNotifOpen}
-        onClose={() => setIsNotifOpen(false)}
-        onSelectStudent={(studentId) => {
-          setIsNotifOpen(false);
-          onOpenNewObservation(studentId);
-        }}
-      />
+      {/* Real Firestore Messaging & Notifications System */}
+      {isMessagingModalOpen && currentUser && (
+        <MessagingModal
+          isOpen={isMessagingModalOpen}
+          onClose={() => {
+            setIsMessagingModalOpen(false);
+            messagingService.getUnreadCounts().then(setUnreadCounts).catch(() => {});
+          }}
+          currentUser={currentUser}
+          initialTab={messagingInitialTab}
+          initialRecipientId={messagingRecipientId}
+          initialStudentId={messagingStudentId}
+          initialStudentName={messagingStudentName}
+        />
+      )}
 
-      {/* Today's Teaching Schedule Modal */}
-      <GuruScheduleModal
-        isOpen={isScheduleOpen}
-        onClose={() => setIsScheduleOpen(false)}
-      />
+      {/* Notification Center (Fallback/Direct compatibility) */}
+      {isNotifOpen && (
+        <GuruNotificationModal
+          isOpen={isNotifOpen}
+          onClose={() => setIsNotifOpen(false)}
+          onSelectStudent={(studentId) => {
+            setIsNotifOpen(false);
+            onOpenNewObservation(studentId);
+          }}
+          onOpenInbox={(initialTab) => {
+            setIsNotifOpen(false);
+            setMessagingInitialTab(initialTab || 'inbox');
+            setIsMessagingModalOpen(true);
+          }}
+        />
+      )}
 
       {/* Guru Account & School Settings Modal */}
       <GuruAccountSettingsModal

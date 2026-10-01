@@ -1,13 +1,11 @@
 import React from 'react';
 import {
   Users,
-  CheckCircle2,
-  TrendingUp,
-  Clock,
+  ClipboardCheck,
   FileCheck,
   FolderOpen,
   Award,
-  ArrowUpRight,
+  ChevronRight,
 } from 'lucide-react';
 
 interface GuruSummaryCardsProps {
@@ -19,6 +17,7 @@ interface GuruSummaryCardsProps {
   uploadedEvidenceCount: number;
   semesterAssessmentPercentage: number;
   onSelectCard: (cardType: 'STUDENTS' | 'TODAY_OBS' | 'WEEKLY_OBS' | 'PENDING_REPORTS' | 'COMPLETED_REPORTS' | 'EVIDENCES' | 'ASSESSMENT_PROGRESS') => void;
+  studentClassName?: string;
 }
 
 export const GuruSummaryCards: React.FC<GuruSummaryCardsProps> = ({
@@ -30,187 +29,134 @@ export const GuruSummaryCards: React.FC<GuruSummaryCardsProps> = ({
   uploadedEvidenceCount,
   semesterAssessmentPercentage,
   onSelectCard,
+  studentClassName,
 }) => {
   return (
-    <div className="space-y-3">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">
-          Ringkasan Aktivitas & Asesmen Guru
-        </h2>
-        <span className="text-xs text-slate-400 font-medium">
-          Klik kartu untuk melihat rincian & filter data
-        </span>
-      </div>
-
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 xl:grid-cols-7 gap-3 sm:gap-4">
-        {/* 1. Jumlah Peserta Didik */}
+    <div className="space-y-2.5">
+      <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+        {/* 1. PESERTA DIDIK */}
         <div
           onClick={() => onSelectCard('STUDENTS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-emerald-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 hover:border-emerald-300 hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
         >
-          <div className="flex items-center justify-between mb-2">
+          <div>
             <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
-              Peserta Didik
+              PESERTA DIDIK
             </span>
-            <span className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
-              <Users className="w-4 h-4" />
-            </span>
+            <div className="mt-1">
+              <h3 className="text-xl font-extrabold text-slate-800 leading-tight">
+                {totalStudents} <span className="text-xs font-semibold text-slate-500">Anak</span>
+              </h3>
+              <p className="text-xs text-emerald-700 font-semibold mt-0.5">
+                {studentClassName || 'Kelompok B'}
+              </p>
+            </div>
           </div>
-          <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {totalStudents} <span className="text-xs font-semibold text-slate-500">Anak</span>
-            </h3>
-            <p className="text-[11px] text-emerald-600 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Kelompok B - Bintang</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
-          </div>
-        </div>
-
-        {/* 2. Observasi Hari Ini */}
-        <div
-          onClick={() => onSelectCard('TODAY_OBS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-teal-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-teal-700 transition-colors">
-              Observasi Hari Ini
-            </span>
-            <span className="p-1.5 rounded-xl bg-teal-50 text-teal-600">
-              <CheckCircle2 className="w-4 h-4" />
-            </span>
-          </div>
-          <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {todayObservationsCount} <span className="text-xs font-semibold text-slate-500">Selesai</span>
-            </h3>
-            <p className="text-[11px] text-teal-700 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Target Harian PAUD</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
+          <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 group-hover:scale-105 transition-transform">
+            <Users className="w-5 h-5" />
           </div>
         </div>
 
-        {/* 3. Observasi Minggu Ini */}
+        {/* 2. OBSERVASI (Gabungan Hari Ini dan Minggu Ini) */}
         <div
           onClick={() => onSelectCard('WEEKLY_OBS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-indigo-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 hover:border-teal-300 hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-indigo-700 transition-colors">
-              Observasi Mingguan
-            </span>
-            <span className="p-1.5 rounded-xl bg-indigo-50 text-indigo-600">
-              <TrendingUp className="w-4 h-4" />
-            </span>
-          </div>
           <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {weeklyObservationsCount} <span className="text-xs font-semibold text-slate-500">Catatan</span>
-            </h3>
-            <p className="text-[11px] text-indigo-600 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Minggu Berjalan</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-teal-700 transition-colors">
+              OBSERVASI
+            </span>
+            <div className="mt-1 flex items-baseline gap-3 text-slate-800">
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectCard('TODAY_OBS');
+                }}
+                className="hover:text-teal-700 transition-colors"
+                title="Lihat Observasi Hari Ini"
+              >
+                <span className="text-xl font-extrabold text-slate-800">{todayObservationsCount}</span>{' '}
+                <span className="text-xs font-semibold text-slate-500">Hari Ini</span>
+              </div>
+              <span className="text-slate-300">•</span>
+              <div
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onSelectCard('WEEKLY_OBS');
+                }}
+                className="hover:text-teal-700 transition-colors"
+                title="Lihat Observasi Minggu Ini"
+              >
+                <span className="text-xl font-extrabold text-slate-800">{weeklyObservationsCount}</span>{' '}
+                <span className="text-xs font-semibold text-slate-500">Minggu Ini</span>
+              </div>
+            </div>
+          </div>
+          <div className="p-2.5 rounded-xl bg-teal-50 text-teal-600 group-hover:scale-105 transition-transform">
+            <ClipboardCheck className="w-5 h-5" />
           </div>
         </div>
 
-        {/* 4. Laporan Belum Selesai */}
-        <div
-          onClick={() => onSelectCard('PENDING_REPORTS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-amber-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-amber-700 transition-colors">
-              Laporan Proses
-            </span>
-            <span className="p-1.5 rounded-xl bg-amber-50 text-amber-600">
-              <Clock className="w-4 h-4" />
-            </span>
-          </div>
-          <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {pendingReportsCount} <span className="text-xs font-semibold text-slate-500">Anak</span>
-            </h3>
-            <p className="text-[11px] text-amber-700 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Perlu tinjauan akhir</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
-          </div>
-        </div>
-
-        {/* 5. Laporan Sudah Selesai */}
+        {/* 3. LAPORAN (Gabungan Laporan Proses dan Siap) */}
         <div
           onClick={() => onSelectCard('COMPLETED_REPORTS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-emerald-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 hover:border-indigo-300 hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-emerald-700 transition-colors">
-              Laporan Siap
-            </span>
-            <span className="p-1.5 rounded-xl bg-emerald-50 text-emerald-600">
-              <FileCheck className="w-4 h-4" />
-            </span>
-          </div>
           <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {completedReportsCount} <span className="text-xs font-semibold text-slate-500">Rapor</span>
-            </h3>
-            <p className="text-[11px] text-emerald-700 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Terverifikasi Kepala Sekolah</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-indigo-700 transition-colors">
+              LAPORAN PERKEMBANGAN
+            </span>
+            <div className="mt-1">
+              <h3 className="text-xl font-extrabold text-slate-800 leading-tight">
+                {pendingReportsCount} <span className="text-xs font-semibold text-slate-500">Proses</span>
+                <span className="mx-1.5 text-slate-300 font-normal">·</span>
+                {completedReportsCount} <span className="text-xs font-semibold text-slate-500">Siap</span>
+              </h3>
+            </div>
+          </div>
+          <div className="p-2.5 rounded-xl bg-indigo-50 text-indigo-600 group-hover:scale-105 transition-transform">
+            <FileCheck className="w-5 h-5" />
           </div>
         </div>
 
-        {/* 6. Jumlah Dokumentasi */}
-        <div
-          onClick={() => onSelectCard('EVIDENCES')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-sky-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
-        >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-sky-700 transition-colors">
-              Bukti Autentik
-            </span>
-            <span className="p-1.5 rounded-xl bg-sky-50 text-sky-600">
-              <FolderOpen className="w-4 h-4" />
-            </span>
-          </div>
-          <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {uploadedEvidenceCount} <span className="text-xs font-semibold text-slate-500">File</span>
-            </h3>
-            <p className="text-[11px] text-sky-700 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Foto, Video & Voice Note</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
-          </div>
-        </div>
-
-        {/* 7. Persentase Asesmen Semester */}
+        {/* 4. CAPAIAN SEMESTER */}
         <div
           onClick={() => onSelectCard('ASSESSMENT_PROGRESS')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 hover:border-purple-300 hover:shadow-md transition-all cursor-pointer group flex flex-col justify-between"
+          className="bg-white p-3.5 sm:p-4 rounded-2xl border border-slate-200/80 hover:border-purple-300 hover:shadow-xs transition-all cursor-pointer group flex items-center justify-between"
         >
-          <div className="flex items-center justify-between mb-2">
-            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-purple-700 transition-colors">
-              Capaian Semester
-            </span>
-            <span className="p-1.5 rounded-xl bg-purple-50 text-purple-600">
-              <Award className="w-4 h-4" />
-            </span>
-          </div>
           <div>
-            <h3 className="text-xl font-extrabold text-slate-800">
-              {semesterAssessmentPercentage}%
-            </h3>
-            <p className="text-[11px] text-purple-700 font-semibold mt-1 flex items-center gap-0.5">
-              <span>Kurikulum Merdeka PAUD</span>
-              <ArrowUpRight className="w-3 h-3" />
-            </p>
+            <span className="text-[11px] font-bold text-slate-400 uppercase tracking-wider group-hover:text-purple-700 transition-colors">
+              CAPAIAN SEMESTER
+            </span>
+            <div className="mt-1">
+              <h3 className="text-xl font-extrabold text-slate-800 leading-tight">
+                {semesterAssessmentPercentage}%
+              </h3>
+            </div>
           </div>
+          <div className="p-2.5 rounded-xl bg-purple-50 text-purple-600 group-hover:scale-105 transition-transform">
+            <Award className="w-5 h-5" />
+          </div>
+        </div>
+
+        {/* 5. BUKTI AUTENTIK (Compact bar spanning 2 columns) */}
+        <div
+          onClick={() => onSelectCard('EVIDENCES')}
+          className="md:col-span-2 bg-white hover:bg-sky-50/40 px-4 py-2.5 rounded-xl border border-slate-200/80 hover:border-sky-300 transition-all cursor-pointer flex items-center justify-between text-xs group"
+        >
+          <div className="flex items-center gap-2">
+            <FolderOpen className="w-4 h-4 text-sky-600 group-hover:scale-110 transition-transform" />
+            <span className="font-bold text-slate-700">Bukti Autentik</span>
+            <span className="text-slate-300">—</span>
+            <span className="font-semibold text-slate-500">{uploadedEvidenceCount} File</span>
+          </div>
+          <span className="text-[11px] font-semibold text-sky-700 group-hover:translate-x-0.5 transition-transform flex items-center gap-1">
+            <span>Buka Portofolio</span>
+            <ChevronRight className="w-3.5 h-3.5" />
+          </span>
         </div>
       </div>
     </div>
   );
 };
+

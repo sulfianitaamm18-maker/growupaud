@@ -104,6 +104,28 @@ export const semesterReportService = {
   },
 
   /**
+   * Mengambil seluruh riwayat laporan semester untuk satu siswa tertentu (aman untuk hak akses Orang Tua / Guru)
+   */
+  async getReportsByStudent(studentId: string): Promise<SemesterReport[]> {
+    if (!auth.currentUser) return [];
+    try {
+      const colRef = collection(db, COLLECTION_NAME);
+      const q = query(colRef, where('studentId', '==', studentId));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => d.data() as SemesterReport);
+      return list.sort((a, b) => {
+        if (a.academicYearName !== b.academicYearName) {
+          return (b.academicYearName || '').localeCompare(a.academicYearName || '');
+        }
+        return (b.semester || 1) - (a.semester || 1);
+      });
+    } catch (err) {
+      console.warn('Gagal mengambil laporan semester siswa:', err);
+      return [];
+    }
+  },
+
+  /**
    * Filter observasi khusus yang COCOK dengan studentId, academicYearId, dan semester
    * (Menggunakan normalisasi ketat, BUKAN String.includes!)
    */

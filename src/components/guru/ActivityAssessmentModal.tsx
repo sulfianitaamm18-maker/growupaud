@@ -809,12 +809,17 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
                                     </span>
                                     <div>
                                       <p className="text-xs font-bold text-slate-900">{ind.text}</p>
+                                      {ind.observableBehavior && (
+                                        <p className="text-[11px] text-emerald-800 bg-emerald-50/70 px-2 py-1 rounded-md mt-1 border border-emerald-100">
+                                          <strong className="font-semibold">Perilaku Teramati:</strong> {ind.observableBehavior}
+                                        </p>
+                                      )}
                                       <button
                                         type="button"
                                         onClick={() =>
                                           setExpandedRubricIndId(isExpanded ? null : ind.id)
                                         }
-                                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold underline mt-0.5"
+                                        className="text-[10px] text-indigo-600 hover:text-indigo-800 font-bold underline mt-0.5 block"
                                       >
                                         {isExpanded ? 'Sembunyikan Deskripsi Rubrik' : 'Lihat Deskripsi Rubrik BB/MB/BSH/BSB'}
                                       </button>
@@ -880,6 +885,49 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
                           })}
                         </div>
 
+                        {/* Non-Focus Aspects Section (Transparent & Polite) */}
+                        {currentActivity.nonFocusAspects && currentActivity.nonFocusAspects.length > 0 && (
+                          <div className="p-3.5 bg-slate-50 rounded-2xl border border-slate-200 text-xs space-y-2">
+                            <div className="flex items-center justify-between">
+                              <span className="font-bold text-slate-600 flex items-center gap-1.5 text-[11px]">
+                                <Info className="w-3.5 h-3.5 text-slate-400" />
+                                <span>Aspek Non-Fokus (Sengaja Tidak Dinilai pada Kegiatan Ini):</span>
+                              </span>
+                            </div>
+                            <div className="flex flex-wrap gap-2">
+                              {currentActivity.nonFocusAspects.map((nfa) => (
+                                <div
+                                  key={nfa.aspect}
+                                  className="px-2.5 py-1 bg-white rounded-xl border border-slate-200 text-[11px] flex items-center gap-2 shadow-2xs"
+                                >
+                                  <span className="font-bold text-slate-700">{nfa.aspectLabel || nfa.aspect}</span>
+                                  <span className="text-slate-400">|</span>
+                                  <span className="text-slate-500 italic text-[10px]">{nfa.reason}</span>
+                                  <button
+                                    type="button"
+                                    onClick={() => {
+                                      const newInd = curriculumStore.addIndicatorToActivity(currentActivity.id, {
+                                        text: `Anak menunjukkan capaian aspek ${nfa.aspectLabel || nfa.aspect} selama kegiatan`,
+                                        aspect: nfa.aspect,
+                                        rubric: DEFAULT_RUBRIC,
+                                        ownerType: 'TEACHER',
+                                        status: 'ACTIVE',
+                                      });
+                                      setObservationIndicators((prev) => [
+                                        ...prev,
+                                        { ...newInd, rating: 'BELUM_DINILAI', checked: false },
+                                      ]);
+                                    }}
+                                    className="text-emerald-700 hover:text-emerald-900 font-bold text-[10px] ml-1 cursor-pointer underline"
+                                  >
+                                    + Amati Aspek Ini
+                                  </button>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
                         {/* Add Custom Indicator Button & Form */}
                         {!showAddCustomInd ? (
                           <button
@@ -904,12 +952,12 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
                                 onChange={(e) => setCustomIndAspect(e.target.value as DevelopmentalAspect)}
                                 className="px-2.5 py-1.5 text-xs border border-slate-300 rounded-lg bg-white font-bold"
                               >
-                                <option value="KOGNITIF">KOGNITIF</option>
-                                <option value="MOTORIK_KASAR">MOTORIK KASAR</option>
-                                <option value="MOTORIK_HALUS">MOTORIK HALUS</option>
-                                <option value="BAHASA">LITERASI & STEAM</option>
-                                <option value="NAM">NAM</option>
-                                <option value="JATI_DIRI">JATI DIRI</option>
+                                <option value="NAM">1. Nilai Agama & Moral (NAM)</option>
+                                <option value="JATI_DIRI">2. Jati Diri / Sosial Emosional (JATI_DIRI)</option>
+                                <option value="LITERASI_STEAM">3. Literasi & STEAM (LITERASI_STEAM)</option>
+                                <option value="MOTORIK_KASAR">4. Motorik Kasar (MOTORIK_KASAR)</option>
+                                <option value="MOTORIK_HALUS">5. Motorik Halus (MOTORIK_HALUS)</option>
+                                <option value="KOGNITIF">6. Kognitif & Berpikir (KOGNITIF)</option>
                               </select>
                               <input
                                 type="text"
@@ -921,14 +969,14 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
                               />
                               <button
                                 type="submit"
-                                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold text-xs"
+                                className="px-3 py-1.5 rounded-lg bg-indigo-600 text-white font-bold text-xs cursor-pointer"
                               >
                                 Simpan Indikator
                               </button>
                               <button
                                 type="button"
                                 onClick={() => setShowAddCustomInd(false)}
-                                className="px-2.5 py-1.5 rounded-lg bg-slate-200 text-slate-700 font-bold text-xs"
+                                className="px-2.5 py-1.5 rounded-lg bg-slate-200 text-slate-700 font-bold text-xs cursor-pointer"
                               >
                                 Batal
                               </button>
@@ -1486,3 +1534,5 @@ export const ActivityAssessmentModal: React.FC<ActivityAssessmentModalProps> = (
     </div>
   );
 };
+
+export default ActivityAssessmentModal;

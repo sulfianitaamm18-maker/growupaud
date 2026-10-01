@@ -66,6 +66,9 @@ export function sanitizeForFirestore<T extends Record<string, any>>(obj: T): Par
 
 class UserStoreService {
   private listeners: Array<() => void> = [];
+  private activeFetchPromises: Map<string, Promise<UserProfile[]>> = new Map();
+  private userCache: Map<string, { users: UserProfile[]; timestamp: number }> = new Map();
+  private readonly CACHE_TTL_MS = 60000; // 60s cache TTL to prevent rapid duplicate fetches
 
   public subscribe(listener: () => void): () => void {
     this.listeners.push(listener);
@@ -76,6 +79,26 @@ class UserStoreService {
 
   private notify() {
     this.listeners.forEach((l) => l());
+  }
+
+  // Invalidate in-memory user cache
+  public invalidateUserCache(schoolId?: string): void {
+    if (schoolId) {
+      this.userCache.delete(schoolId);
+      this.activeFetchPromises.delete(schoolId);
+    } else {
+      this.userCache.clear();
+      this.activeFetchPromises.clear();
+    }
+  }
+
+  // Get cached user profiles synchronously if still fresh
+  public getCachedUserProfiles(schoolId: string = 'main-school'): UserProfile[] | null {
+    const entry = this.userCache.get(schoolId);
+    if (entry && Date.now() - entry.timestamp < this.CACHE_TTL_MS) {
+      return entry.users;
+    }
+    return null;
   }
 
   // Get all cached local profiles
@@ -116,6 +139,7 @@ class UserStoreService {
   // Clear local profile cache from localStorage upon logout
   public clearLocalCache(): void {
     try {
+      this.invalidateUserCache();
       if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
         localStorage.removeItem(USERS_LOCAL_STORAGE_KEY);
       }
@@ -239,8 +263,23 @@ class UserStoreService {
   }
 
   // Get list of all users for Admin Management
-  public async getAllUserProfiles(schoolId: string = 'main-school'): Promise<UserProfile[]> {
-    console.log('[USERS GETDOCS START] schoolId =', schoolId);
+  public async getAllUserProfiles(
+    schoolId: string = 'main-school',
+    forceRefresh: boolean = false
+  ): Promise<UserProfile[]> {
+    if (!forceRefresh) {
+      // 1. Cek cache in-memory yang masih valid (mencegah duplicate query)
+      const cached = this.userCache.get(schoolId);
+      if (cached && Date.now() - cached.timestamp < this.CACHE_TTL_MS && cached.users.length > 0) {
+        return cached.users;
+      }
+
+      // 2. Cek apakah ada query Firestore yang sedang berjalan (in-flight promise deduplication)
+      const inFlight = this.activeFetchPromises.get(schoolId);
+      if (inFlight) {
+        return inFlight;
+      }
+    }
 
     if (!auth.currentUser) {
       console.warn('[USERS GETDOCS ERROR] User not authenticated in Firebase Auth');
@@ -250,48 +289,48 @@ class UserStoreService {
       return local;
     }
 
-    try {
-      const usersCol = collection(db, 'users');
-      const q = query(usersCol, where('schoolId', '==', schoolId));
-      const querySnap = await getDocs(q);
-      const fetched: UserProfile[] = [];
-      const localMap: Record<string, UserProfile> = {};
+    const fetchPromise = (async () => {
+      console.log('[USERS GETDOCS START] schoolId =', schoolId);
 
-      for (const docSnap of querySnap.docs) {
-        const profile = this.mapDocumentToUserProfile(docSnap.id, docSnap.data());
-        if (isUnwantedTargetUser(profile)) {
-          console.log('[USER STORE] Unwanted target user detected during fetch:', profile.id, profile.name);
-          // Asynchronously attempt to clean up document from Firestore
-          try {
-            const unwantedRef = doc(db, 'users', profile.id);
-            deleteDoc(unwantedRef).catch(() => {
-              // If delete not permitted, mark inactive
-              updateDoc(unwantedRef, { isActive: false }).catch(() => {});
-            });
-          } catch {
-            // Ignore cleanup errors
+      try {
+        const usersCol = collection(db, 'users');
+        const q = query(usersCol, where('schoolId', '==', schoolId));
+        const querySnap = await getDocs(q);
+        const fetched: UserProfile[] = [];
+        const localMap: Record<string, UserProfile> = {};
+
+        for (const docSnap of querySnap.docs) {
+          const profile = this.mapDocumentToUserProfile(docSnap.id, docSnap.data());
+          if (isUnwantedTargetUser(profile)) {
+            // Pure in-memory filtering: NO deleteDoc, NO updateDoc, NO write side-effects during read
+            continue;
           }
-          continue; // Do NOT include in fetched list
+
+          fetched.push(profile);
+          localMap[profile.id] = profile;
         }
 
-        fetched.push(profile);
-        localMap[profile.id] = profile;
+        console.log('[USERS GETDOCS SUCCESS] Fetched count =', fetched.length);
+        this.setLocalProfiles(localMap, false); // READ cache: do not notify to prevent infinite re-trigger loops
+        this.userCache.set(schoolId, { users: fetched, timestamp: Date.now() });
+        return fetched;
+      } catch (e: any) {
+        console.error('[USERS GETDOCS ERROR]', e);
+        const local = Object.values(this.getLocalProfiles()).filter(
+          (u) => (!u.schoolId || u.schoolId === schoolId) && !isUnwantedTargetUser(u)
+        );
+        if (local.length > 0) {
+          console.log('[USERS GETDOCS CACHE FALLBACK] Returning cached count =', local.length);
+          return local;
+        }
+        throw e;
+      } finally {
+        this.activeFetchPromises.delete(schoolId);
       }
+    })();
 
-      console.log('[USERS GETDOCS SUCCESS] Fetched count =', fetched.length);
-      this.setLocalProfiles(localMap, false); // READ cache: do not notify to prevent infinite re-trigger loops
-      return fetched;
-    } catch (e: any) {
-      console.error('[USERS GETDOCS ERROR]', e);
-      const local = Object.values(this.getLocalProfiles()).filter(
-        (u) => (!u.schoolId || u.schoolId === schoolId) && !isUnwantedTargetUser(u)
-      );
-      if (local.length > 0) {
-        console.log('[USERS GETDOCS CACHE FALLBACK] Returning cached count =', local.length);
-        return local;
-      }
-      throw e;
-    }
+    this.activeFetchPromises.set(schoolId, fetchPromise);
+    return fetchPromise;
   }
 
   // Create or save user profile
@@ -305,6 +344,7 @@ class UserStoreService {
     const local = this.getLocalProfiles();
     local[profile.id] = { ...profile, ...clean } as UserProfile;
     this.setLocalProfiles(local, true); // MUTATION: notify listeners
+    this.invalidateUserCache(profile.schoolId || 'main-school');
 
     try {
       const docRef = doc(db, 'users', profile.id);
@@ -350,6 +390,9 @@ class UserStoreService {
         updatedAt: new Date().toISOString(),
       };
       this.setLocalProfiles(local, true); // MUTATION: notify listeners
+      this.invalidateUserCache(local[userId].schoolId || 'main-school');
+    } else {
+      this.invalidateUserCache();
     }
 
     try {
@@ -367,8 +410,12 @@ class UserStoreService {
   public async deleteUserProfile(userId: string): Promise<void> {
     const local = this.getLocalProfiles();
     if (local[userId]) {
+      const schoolId = local[userId].schoolId;
       delete local[userId];
       this.setLocalProfiles(local, true);
+      this.invalidateUserCache(schoolId || 'main-school');
+    } else {
+      this.invalidateUserCache();
     }
 
     try {
@@ -384,6 +431,40 @@ class UserStoreService {
         console.error('Failed to set inactive fallback in Firestore:', fallbackErr);
       }
     }
+  }
+
+  // Individual controlled activation for a single teacher account
+  public async activateTeacher(userId: string): Promise<{ success: boolean; message: string; alreadyActive?: boolean; userId?: string }> {
+    if (!auth.currentUser) {
+      throw new Error('Sesi otentikasi tidak ditemukan. Silakan login kembali.');
+    }
+
+    const idToken = await auth.currentUser.getIdToken();
+    const res = await fetch(`/api/admin/teachers/${encodeURIComponent(userId)}/activate`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${idToken}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    const data = await res.json();
+    if (!res.ok || !data.success) {
+      throw new Error(data.message || 'Gagal mengaktifkan akun guru.');
+    }
+
+    // Update local memory cache if present
+    const local = this.getLocalProfiles();
+    if (local[userId]) {
+      local[userId] = {
+        ...local[userId],
+        isActive: true,
+        updatedAt: new Date().toISOString(),
+      };
+      this.setLocalProfiles(local, true);
+    }
+
+    return data;
   }
 
   // Activate / Deactivate user
@@ -487,9 +568,16 @@ class UserStoreService {
     selectedStudentIds?: string[];
     isActive: boolean;
   }): Promise<{ uid: string; profile: UserProfile }> {
+    if (!auth.currentUser && typeof (auth as any).authStateReady === 'function') {
+      try {
+        await (auth as any).authStateReady();
+      } catch {
+        // ignore
+      }
+    }
     const idToken = await auth.currentUser?.getIdToken();
     if (!idToken) {
-      throw new Error('Sesi Admin tidak ditemukan.');
+      throw new Error('Sesi Admin tidak ditemukan. Silakan login kembali.');
     }
 
     const res = await fetch('/api/admin/create-user', {
@@ -527,9 +615,16 @@ class UserStoreService {
     selectedStudentIds?: string[];
     isActive: boolean;
   }): Promise<UserProfile> {
+    if (!auth.currentUser && typeof (auth as any).authStateReady === 'function') {
+      try {
+        await (auth as any).authStateReady();
+      } catch {
+        // ignore
+      }
+    }
     const idToken = await auth.currentUser?.getIdToken();
     if (!idToken) {
-      throw new Error('Sesi Admin tidak ditemukan.');
+      throw new Error('Sesi Admin tidak ditemukan. Silakan login kembali.');
     }
 
     const res = await fetch('/api/admin/sync-profile', {

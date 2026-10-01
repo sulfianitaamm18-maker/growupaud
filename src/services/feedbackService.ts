@@ -150,12 +150,20 @@ export const feedbackService = {
           const isPermErr =
             err?.code === 'permission-denied' ||
             String(err?.message || '').includes('insufficient permissions');
+          const isTransient =
+            err?.code === 'cancelled' ||
+            err?.name === 'AbortError' ||
+            String(err?.message || '').includes('transport errored');
+
           if (isPermErr) {
             onUpdate([]);
+            if (onError) onError(err);
+          } else if (isTransient) {
+            // Transient WebChannel reconnect: Firestore SDK auto-reconnects, do not wipe UI or notify error
           } else {
             console.warn('Firestore subscribeFeedbacks notice:', err?.message || err);
+            if (onError) onError(err);
           }
-          if (onError) onError(err);
         }
       );
 

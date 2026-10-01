@@ -11,6 +11,10 @@ import {
 } from 'firebase/firestore';
 import { db, auth } from '../lib/firebase';
 import { ObservationRecord } from '../types';
+import { academicYearService } from './academicYearService';
+import { enrollmentService } from './enrollmentService';
+import { auditLogService } from './auditLogService';
+import { normalizeSemester, formatSemesterLabel } from '../utils/semesterUtils';
 
 const DEFAULT_SCHOOL_ID = 'main-school';
 
@@ -76,6 +80,9 @@ export const observationService = {
       voiceNote: raw.voiceNote,
       aiAnalysis: raw.aiAnalysis || raw.aiInsight || raw.analysis,
       status: raw.status || 'FINAL',
+      academicYearId: raw.academicYearId || raw.academic_year_id || '',
+      enrollmentId: raw.enrollmentId || raw.enrollment_id || '',
+      semesterNumber: typeof raw.semesterNumber === 'number' ? (raw.semesterNumber === 2 ? 2 : 1) : (raw.semester ? normalizeSemester(raw.semester) : 1),
       createdAt: raw.createdAt,
       updatedAt: raw.updatedAt,
     };
@@ -161,11 +168,44 @@ export const observationService = {
   ): Promise<ObservationRecord> {
     const docId = obs.id || `obs-${Date.now()}`;
     const nowISO = new Date().toISOString();
+    const effectiveSchoolId = obs.schoolId || schoolId;
+
+    // Resolusi Tahun Ajaran & Proteksi CLOSED
+    let targetYearId = obs.academicYearId;
+    let targetEnrollmentId = obs.enrollmentId;
+    let targetSemesterNumber = obs.semesterNumber;
+    let targetAcademicYearName = obs.academicYear;
+
+    if (!targetYearId) {
+      const activeYear = await academicYearService.getActiveAcademicYear(effectiveSchoolId);
+      if (activeYear) {
+        targetYearId = activeYear.id;
+        targetAcademicYearName = activeYear.name;
+        targetSemesterNumber = activeYear.activeSemester;
+      }
+    } else {
+      const yearData = await academicYearService.getAcademicYearById(targetYearId);
+      if (yearData && yearData.status === 'CLOSED') {
+        throw new Error('Tahun ajaran ini sudah ditutup (CLOSED). Tidak dapat menambahkan observasi baru.');
+      }
+    }
+
+    if (!targetEnrollmentId && obs.studentId && targetYearId) {
+      const activeEnr = await enrollmentService.getActiveEnrollmentForStudent(obs.studentId, targetYearId);
+      if (activeEnr) {
+        targetEnrollmentId = activeEnr.id;
+      }
+    }
 
     const recordToSave: ObservationRecord = {
       ...obs,
       id: docId,
-      schoolId: obs.schoolId || schoolId,
+      schoolId: effectiveSchoolId,
+      academicYearId: targetYearId || '',
+      academicYear: targetAcademicYearName || obs.academicYear || '2026/2027',
+      enrollmentId: targetEnrollmentId || '',
+      semesterNumber: targetSemesterNumber || 1,
+      semester: obs.semester || formatSemesterLabel(targetSemesterNumber || 1),
       evidences: obs.evidences || [],
       indicators: obs.indicators || [],
       createdAt: obs.createdAt || nowISO,
@@ -182,6 +222,29 @@ export const observationService = {
 
     try {
       await setDoc(docRef, sanitized);
+
+      // Catat ke Audit Trail secara terpusat
+      try {
+        await auditLogService.logAction({
+          schoolId: effectiveSchoolId,
+          actorId: auth.currentUser?.uid || obs.teacherId || 'system',
+          actorRole: 'TEACHER',
+          action: 'RECORD_OBSERVATION',
+          module: 'OBSERVATION',
+          targetType: 'STUDENT',
+          targetId: obs.studentId,
+          targetName: obs.studentName || 'Siswa PAUD',
+          metadata: {
+            observationId: docId,
+            activityTitle: obs.activityTitle || '',
+            cp: obs.cp || '',
+            tp: obs.tp || '',
+          },
+        });
+      } catch (auditErr) {
+        console.warn('Notice audit log observation:', auditErr);
+      }
+
       return recordToSave;
     } catch (err: any) {
       console.error('[OBSERVATION SAVE ERROR]');
@@ -195,6 +258,12 @@ export const observationService = {
    * Update an existing observation record in Firestore.
    */
   async updateObservation(obs: ObservationRecord): Promise<void> {
+    if (obs.academicYearId) {
+      const yearData = await academicYearService.getAcademicYearById(obs.academicYearId);
+      if (yearData && yearData.status === 'CLOSED') {
+        throw new Error('Tahun ajaran ini sudah ditutup (CLOSED). Tidak dapat mengubah observasi yang terkunci.');
+      }
+    }
     const docRef = doc(db, 'observations', obs.id);
     const updatedRecord: ObservationRecord = {
       ...obs,
@@ -209,6 +278,16 @@ export const observationService = {
    */
   async deleteObservation(id: string): Promise<void> {
     const docRef = doc(db, 'observations', id);
+    const snap = await getDoc(docRef);
+    if (snap.exists()) {
+      const data = snap.data();
+      if (data?.academicYearId) {
+        const yearData = await academicYearService.getAcademicYearById(data.academicYearId);
+        if (yearData && yearData.status === 'CLOSED') {
+          throw new Error('Tahun ajaran ini sudah ditutup (CLOSED). Tidak dapat menghapus observasi yang terkunci.');
+        }
+      }
+    }
     await deleteDoc(docRef);
   },
 
@@ -229,8 +308,28 @@ export const observationService = {
 
     const obsRef = collection(db, 'observations');
     let q;
+    const isParent = userRole === 'PARENT' || userRole === 'ORANG_TUA';
 
-    if ((userRole === 'PARENT' || userRole === 'ORANG_TUA')) {
+    if (isParent) {
+      // Immediate verified load for parent children observations
+      if (auth.currentUser) {
+        auth.currentUser.getIdToken().then((token) => {
+          fetch('/api/parent/observations', {
+            headers: { Authorization: `Bearer ${token}` },
+          })
+            .then((res) => (res.ok ? res.json() : null))
+            .then((data) => {
+              if (data && Array.isArray(data.observations) && data.observations.length > 0 && onUpdate) {
+                const norm = data.observations.map((d: any) =>
+                  this.normalizeObservation(d.id, d, schoolId)
+                );
+                onUpdate(norm);
+              }
+            })
+            .catch(() => {});
+        }).catch(() => {});
+      }
+
       if (parentStudentIds && parentStudentIds.length > 0) {
         q = query(obsRef, where('studentId', 'in', parentStudentIds.slice(0, 10)));
       } else {
@@ -261,8 +360,14 @@ export const observationService = {
         if (onUpdate) onUpdate(records);
       },
       (error) => {
-        console.warn('Firestore subscribeToObservations error:', error);
-        if (onError) onError(error);
+        const isTransient =
+          error?.code === 'cancelled' ||
+          error?.name === 'AbortError' ||
+          String(error?.message || '').includes('transport errored');
+        if (!isTransient) {
+          console.warn('Firestore subscribeToObservations error:', error?.message || error);
+          if (onError) onError(error);
+        }
       }
     );
 

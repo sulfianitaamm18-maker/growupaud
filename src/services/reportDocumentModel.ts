@@ -13,6 +13,14 @@ import {
   RATING_PERCENTAGES,
 } from '../utils/studentMetrics';
 
+export interface ObservedIndicatorItem {
+  text: string;
+  rating: string;
+  ratingLabel: string;
+  activityTitle?: string;
+  date?: string;
+}
+
 export interface AspectDetailedReportItem {
   aspectKey: DevelopmentalAspect;
   aspectTitle: string;
@@ -25,6 +33,15 @@ export interface AspectDetailedReportItem {
   whatNeedsStrengthening: string; // Actionable positive growth focus
   hasSufficientData: boolean;
   relatedIndicatorsCount: number;
+  observedIndicators: ObservedIndicatorItem[];
+  observationNotes: string[];
+  supportingActivities: string[];
+  supportingEvidence?: {
+    activityTitle: string;
+    note?: string;
+    photoUrl?: string;
+    date?: string;
+  }[];
 }
 
 export interface DevelopedPointItem {
@@ -42,9 +59,15 @@ export interface GrowthPointItem {
 }
 
 export interface HomeStimulationItem {
-  title: string;
-  activity: string;
-  skillTrained: string;
+  title: string; // Nama kegiatan
+  purpose: string; // Tujuan
+  howTo: string; // Cara melakukan
+  materials: string; // Alat/bahan sederhana
+  duration: string; // Durasi
+  aspectStimulated: string; // Kemampuan/aspek yang distimulasi
+  skillTrained: string; // Melatih kemampuan spesifik
+  activity: string; // Deskripsi singkat
+  curriculumContext?: string; // CP / TP relevan
 }
 
 export interface AuthenticEvidenceReportItem {
@@ -55,6 +78,9 @@ export interface AuthenticEvidenceReportItem {
   url?: string;
   caption: string;
   isAssessmentLinked?: boolean;
+  aspectName?: string;
+  curriculumContext?: string;
+  tags?: string[];
 }
 
 export interface CanonicalReportDocument {
@@ -100,9 +126,28 @@ export interface CanonicalReportDocument {
   overallSummary: {
     title: string;
     description: string; // 60 - 85 words concise parent-friendly synthesis
+    overallPercentage?: number | null;
+    topStrengths?: string[];
+    emergingAreas?: string[];
   };
   aspects: AspectDetailedReportItem[];
   overallPercentage: number | null;
+  visualSummary?: {
+    strengths: string[];
+    emerging: string[];
+    needsReinforcement: string[];
+    mostProminentSkill: string;
+    furtherStimulationPriority: string;
+  };
+  teacherNotesData?: {
+    generalNote: string;
+    positiveToMaintain: string;
+    areasToStrengthen: string;
+    additionalNote?: string;
+    teacherName: string;
+    principalName: string;
+    reportDate: string;
+  };
   quickSummary: {
     topDeveloped: {
       aspect: string;
@@ -135,16 +180,32 @@ export interface CanonicalReportDocument {
     parent: {
       label: string;
       name: string;
+      signatureDataUrl?: string | null;
+      isAuthorized?: boolean;
+      authorizedAt?: string | null;
     };
     teacher: {
       label: string;
       name: string;
       locationAndDate: string;
+      nip?: string;
+      signatureDataUrl?: string | null;
+      isAuthorized?: boolean;
+      authorizedAt?: string | null;
+      authorizedBy?: string | null;
+      verificationCode?: string | null;
     };
     principal: {
       label: string;
       name: string;
+      nip?: string;
+      signatureDataUrl?: string | null;
+      isAuthorized?: boolean;
+      authorizedAt?: string | null;
+      authorizedBy?: string | null;
+      verificationCode?: string | null;
     };
+    authorizationStatus?: 'UNAUTHORIZED' | 'PARTIALLY_AUTHORIZED' | 'FULLY_AUTHORIZED';
   };
 }
 
@@ -176,6 +237,33 @@ export function buildCanonicalReportDocument(
     schoolName?: string;
     schoolAddress?: string;
     logoUrl?: string | null;
+    digitalSignatures?: {
+      teacher?: {
+        signerName?: string;
+        signerTitle?: string;
+        nip?: string;
+        signatureDataUrl?: string | null;
+        isAuthorized?: boolean;
+        authorizedAt?: string | null;
+        verificationCode?: string | null;
+        locationAndDate?: string;
+      } | null;
+      principal?: {
+        signerName?: string;
+        signerTitle?: string;
+        nip?: string;
+        signatureDataUrl?: string | null;
+        isAuthorized?: boolean;
+        authorizedAt?: string | null;
+        verificationCode?: string | null;
+      } | null;
+      parent?: {
+        signerName?: string;
+        signatureDataUrl?: string | null;
+        isAuthorized?: boolean;
+        authorizedAt?: string | null;
+      } | null;
+    };
   }
 ): CanonicalReportDocument {
   const activeYear = schoolProfile.academicYear || '2026/2027';
@@ -220,16 +308,18 @@ export function buildCanonicalReportDocument(
     {
       sum: number;
       count: number;
-      indicators: { text: string; rating: string; actTitle: string }[];
+      indicators: { text: string; rating: string; actTitle: string; date?: string }[];
       notes: string[];
+      activities: string[];
+      evidences: { activityTitle: string; note?: string; photoUrl?: string; date?: string }[];
     }
   > = {
-    NAM: { sum: 0, count: 0, indicators: [], notes: [] },
-    JATI_DIRI: { sum: 0, count: 0, indicators: [], notes: [] },
-    LITERASI_STEAM: { sum: 0, count: 0, indicators: [], notes: [] },
-    MOTORIK_KASAR: { sum: 0, count: 0, indicators: [], notes: [] },
-    MOTORIK_HALUS: { sum: 0, count: 0, indicators: [], notes: [] },
-    KOGNITIF: { sum: 0, count: 0, indicators: [], notes: [] },
+    NAM: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
+    JATI_DIRI: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
+    LITERASI_STEAM: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
+    MOTORIK_KASAR: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
+    MOTORIK_HALUS: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
+    KOGNITIF: { sum: 0, count: 0, indicators: [], notes: [], activities: [], evidences: [] },
   };
 
   let totalSum = 0;
@@ -245,6 +335,8 @@ export function buildCanonicalReportDocument(
     caption: string;
     isLinked: boolean;
     timestamp: number;
+    aspectName?: string;
+    curriculumContext?: string;
   }[] = [];
 
   const rawDeveloped: DevelopedPointItem[] = [];
@@ -255,10 +347,20 @@ export function buildCanonicalReportDocument(
     if (obs.teacherNote && obs.teacherNote.trim()) {
       teacherNotes.push(obs.teacherNote.trim());
     }
+    const obsNoteText = (obs as any).notes || obs.teacherNote || (obs as any).anecdote || obs.voiceNoteText || '';
 
     const actTitle = obs.activityTitle || 'Kegiatan Pembelajaran';
     const obsDate = obs.date || todayFormatted;
     const hasIndicators = Boolean(obs.indicators && obs.indicators.length > 0);
+    const themeName = (obs as any).theme || obs.themeId;
+    const subThemeName = (obs as any).subTheme || obs.subthemeId;
+    const currCtx = themeName ? `${themeName}${subThemeName ? ` • ${subThemeName}` : ''}` : undefined;
+
+    // Determine primary aspect for observation if available
+    let primaryAspectName: string | undefined = undefined;
+    if ((obs as any).aspect) {
+      primaryAspectName = (ASPECT_LABELS as any)[(obs as any).aspect] || (obs as any).aspect;
+    }
 
     // Collect Photos / Evidences
     if (obs.evidences && obs.evidences.length > 0) {
@@ -266,7 +368,7 @@ export function buildCanonicalReportDocument(
         if (ev && ev.url && ev.url.trim().length > 0) {
           rawEvidences.push({
             id: ev.id || `ev-${obs.id}-${idx}`,
-            title: ev.title || `Foto ${idx + 1}`,
+            title: ev.title || `Dokumentasi ${idx + 1}`,
             activityTitle: actTitle,
             date: obsDate,
             url: ev.url,
@@ -276,6 +378,8 @@ export function buildCanonicalReportDocument(
                 : `Ananda aktif berpartisipasi dan menunjukkan ketertarikan tinggi saat kegiatan ${actTitle}.`,
             isLinked: hasIndicators,
             timestamp: new Date(obs.observationDateISO || obs.createdAt || Date.now()).getTime(),
+            aspectName: primaryAspectName,
+            curriculumContext: currCtx,
           });
         }
       });
@@ -298,7 +402,29 @@ export function buildCanonicalReportDocument(
         text: ind.text,
         rating: ind.rating,
         actTitle,
+        date: obsDate,
       });
+
+      if (!aspectMap[matchedAspect].activities.includes(actTitle)) {
+        aspectMap[matchedAspect].activities.push(actTitle);
+      }
+
+      if (obsNoteText && !aspectMap[matchedAspect].notes.includes(obsNoteText)) {
+        aspectMap[matchedAspect].notes.push(obsNoteText);
+      }
+
+      if (obs.evidences && obs.evidences.length > 0) {
+        obs.evidences.forEach((ev) => {
+          if (ev?.url) {
+            aspectMap[matchedAspect].evidences.push({
+              activityTitle: actTitle,
+              note: ev.caption || obsNoteText,
+              photoUrl: ev.url,
+              date: obsDate,
+            });
+          }
+        });
+      }
 
       if (ind.rating === 'BSB' || ind.rating === 'BSH') {
         rawDeveloped.push({
@@ -391,6 +517,21 @@ export function buildCanonicalReportDocument(
       }
     }
 
+    const observedIndicators: ObservedIndicatorItem[] = data.indicators.map((ind) => {
+      const pred = getAchievementPredicate(RATING_PERCENTAGES[ind.rating] ?? 75);
+      return {
+        text: ind.text,
+        rating: ind.rating,
+        ratingLabel: pred.label === 'Belum Ada Penilaian' ? ind.rating : pred.label,
+        activityTitle: ind.actTitle,
+        date: ind.date,
+      };
+    });
+
+    const supportingActivities = Array.from(new Set(data.activities));
+    const observationNotes = Array.from(new Set(data.notes.filter(Boolean)));
+    const supportingEvidence = data.evidences.slice(0, 3);
+
     return {
       aspectKey: key,
       aspectTitle,
@@ -403,6 +544,10 @@ export function buildCanonicalReportDocument(
       whatNeedsStrengthening,
       hasSufficientData: score !== null,
       relatedIndicatorsCount: data.count,
+      observedIndicators,
+      observationNotes,
+      supportingActivities,
+      supportingEvidence,
     };
   });
 
@@ -503,7 +648,7 @@ export function buildCanonicalReportDocument(
   });
 
   const selectedEvidences: AuthenticEvidenceReportItem[] = sortedEvidences
-    .slice(0, 3)
+    .slice(0, 6)
     .map((ev) => {
       let shortCap = ev.caption.trim();
       const firstSentence = shortCap.split('.')[0];
@@ -518,6 +663,8 @@ export function buildCanonicalReportDocument(
         url: ev.url,
         caption: shortCap,
         isAssessmentLinked: ev.isLinked,
+        aspectName: ev.aspectName,
+        curriculumContext: ev.curriculumContext,
       };
     });
 
@@ -561,37 +708,97 @@ export function buildCanonicalReportDocument(
     });
   }
 
-  // 10. Structured "Stimulasi Sederhana di Rumah" (Max 3 - 4 Aktivitas Konkret: Aktivitas → Kemampuan yang dilatih)
-  const homeStimulations: HomeStimulationItem[] = totalCount > 0
-    ? [
-        {
-          title: 'Bermain Mengelompokkan Benda di Rumah',
-          activity: 'Ajak ananda mengelompokkan sendok, mainan, atau pakaian berdasarkan warna, bentuk, atau ukurannya.',
-          skillTrained: 'Melatih kemampuan berpikir logis dan klasifikasi.',
-        },
-        {
-          title: 'Bercerita Bergantian Sebelum Tidur',
-          activity: 'Ajak ananda menceritakan kembali satu kegiatan paling berkesan hari ini dalam 2–3 kalimat sederhana.',
-          skillTrained: 'Melatih kemampuan bahasa ekspresif dan kepercayaan diri.',
-        },
-        {
-          title: 'Merapikan Bersama Menjadi Permainan Menyenangkan',
-          activity: 'Tantang ananda mengembalikan 3 benda ke tempat semula secara mandiri sambil bernyanyi riang.',
-          skillTrained: 'Menumbuhkan kemandirian dan rasa tanggung jawab.',
-        },
-      ]
-    : [
-        {
-          title: 'Komunikasi Hangat dan Membaca Bersama',
-          activity: 'Luangkan waktu 10-15 menit berbincang tentang kegiatan yang disukai ananda dan membaca buku cerita bergambar.',
-          skillTrained: 'Menumbuhkan kedekatan emosional dan literasi awal.',
-        },
-        {
-          title: 'Pembiasaan Kemandirian Ringan di Rumah',
-          activity: 'Ajak ananda mencoba memakai sepatu sendiri dan menaruh pakaian kotor ke tempatnya.',
-          skillTrained: 'Membangun rasa percaya diri dan kemandirian bertahap.',
-        },
-      ];
+  // 10. Bagian 8 — Rekomendasi Stimulasi di Rumah (WAJIB ADA, Realistis, Sederhana & Menyenangkan)
+  const homeStimulations: HomeStimulationItem[] = [];
+
+  // Rekomendasi 1: Stimulasi khusus penguatan aspek/indikator yang masih berkembang
+  if (emergingAspect.aspectKey === 'NAM') {
+    homeStimulations.push({
+      title: 'Kisah Kejujuran & Doa Bersama Sebelum Tidur',
+      purpose: 'Membiasakan ananda bersyukur, berdoa mandiri, dan menumbuhkan empati sejak dini.',
+      howTo: `1. Ajak Ananda ${studentNick} duduk santai sebelum tidur. 2. Bacakan 1 cerita bergambar tentang tolong-menolong atau kejujuran. 3. Berikan giliran ananda memimpin doa singkat dengan kata-katanya sendiri.`,
+      materials: 'Buku cerita dongeng anak bergambar atau buku kisah teladan.',
+      duration: '15–20 menit setiap malam',
+      aspectStimulated: 'Nilai Agama & Budi Pekerti (Empati, Pembiasaan Doa Mandiri)',
+      skillTrained: 'Mengenal nilai moral, empati sosial, dan pembiasaan doa harian.',
+      activity: 'Membaca buku cerita budi pekerti dan bergantian memimpin doa tidur bersama orang tua.',
+      curriculumContext: 'Elemen Nilai Agama dan Budi Pekerti',
+    });
+  } else if (emergingAspect.aspectKey === 'JATI_DIRI') {
+    homeStimulations.push({
+      title: 'Misi Mandiri: Merapikan Mainan dan Memilih Pakaian Sendiri',
+      purpose: 'Melatih kemandirian, tanggung jawab atas barang pribadi, dan regulasi emosi ananda di rumah.',
+      howTo: `1. Berikan ananda 2 pilihan pakaian dan biarkan ia memutuskan pilihannya sendiri. 2. Nyalakan lagu ceria berdurasi 3 menit saat waktu merapikan mainan ke keranjang. 3. Beri pelukan hangat dan apresiasi atas usahanya.`,
+      materials: 'Keranjang mainan ananda, pakaian sehari-hari, lagu anak ceria.',
+      duration: '10–15 menit',
+      aspectStimulated: 'Jati Diri (Kemandirian, Tanggung Jawab, Regulasi Emosi)',
+      skillTrained: 'Kemandirian memilih dan merapikan perlengkapan pribadi tanpa disuruh berulang.',
+      activity: 'Permainan merapikan mainan ke keranjang sambil bernyanyi riang.',
+      curriculumContext: 'Elemen Jati Diri - Regulasi Diri & Kemandirian',
+    });
+  } else if (emergingAspect.aspectKey === 'MOTORIK_HALUS') {
+    homeStimulations.push({
+      title: 'Meremas Adonan Tepung atau Plastisin Rumahan',
+      purpose: 'Menguatkan otot-otot jari tangan (koordinasi motorik halus) untuk kesiapan memegang pensil dan menulis.',
+      howTo: `1. Sediakan plastisin ramah anak atau adonan tepung rumahan. 2. Ajak ananda meremas, menggulung seperti mie/ular, dan membuat bola-bola kecil. 3. Tancapkan sedotan atau manik-manik aman pada adonan.`,
+      materials: 'Plastisin ramah anak atau adonan tepung terigu + minyak, potongan sedotan.',
+      duration: '15–20 menit',
+      aspectStimulated: 'Motorik Halus (Kekuatan Jari Jemari, Koordinasi Mata-Tangan)',
+      skillTrained: 'Kekuatan genggaman jari dan kelenturan pergelangan tangan.',
+      activity: 'Membuat kreasi adonan plastisin berbagai bentuk dan menancapkan sedotan warna-warni.',
+      curriculumContext: 'Elemen Jati Diri / Fisik Motorik Halus',
+    });
+  } else if (emergingAspect.aspectKey === 'MOTORIK_KASAR') {
+    homeStimulations.push({
+      title: 'Jalur Rintangan Karpet Ajaib (Obstacle Course Rumahan)',
+      purpose: 'Melatih keseimbangan tubuh, kelincahan gerak, dan kekuatan motorik kasar ananda.',
+      howTo: `1. Letakkan 3-4 bantal kecil di lantai sebagai pulau batu. 2. Ajak ananda melompati pulau tanpa menyentuh lantai seperti menyeberangi sungai. 3. Tambahkan tantangan berjalan jinjit di atas garis lurus selotip.`,
+      materials: 'Bantal lantai, selotip kertas ramah lantai, matras.',
+      duration: '15–20 menit',
+      aspectStimulated: 'Motorik Kasar (Keseimbangan, Koordinasi Tubuh, Kelincahan)',
+      skillTrained: 'Keseimbangan dinamis dan koordinasi motorik kasar seluruh tubuh.',
+      activity: 'Melompati bantal-bantal pulau dan berjalan jinjit mengikuti lintasan garis lantai.',
+      curriculumContext: 'Elemen Jati Diri / Fisik Motorik Kasar',
+    });
+  } else {
+    homeStimulations.push({
+      title: 'Detektif Benda Rumah: Menghitung & Mengelompokkan Warna',
+      purpose: 'Melatih kemampuan berpikir logis, klasifikasi benda nyata, dan literasi matematika awal.',
+      howTo: `1. Ajak ananda mencari 3 sendok dan 3 wadah plastik di dapur. 2. Ajak mengelompokkan berdasarkan warna dan ukuran dari yang terkecil ke terbesar. 3. Hitung bersama-sama benda yang berhasil dikumpulkan.`,
+      materials: 'Peralatan makan plastik aman, buah-buahan, atau mainan ananda di rumah.',
+      duration: '15–20 menit',
+      aspectStimulated: 'Dasar-dasar Literasi, Matematika, Sains & Teknologi (Kognitif)',
+      skillTrained: 'Klasifikasi logis, korespondensi angka-benda, dan kemampuan observasi kritis.',
+      activity: 'Bermain mengelompokkan dan menghitung benda aman di sekitar rumah bersama Ayah/Bunda.',
+      curriculumContext: 'Elemen Dasar-dasar Literasi, Matematika, Sains, Teknologi, Rekayasa, dan Seni',
+    });
+  }
+
+  // Rekomendasi 2: Stimulasi Literasi & Bahasa Ekspresif Berdasarkan Kekuatan Anak
+  homeStimulations.push({
+    title: 'Pojok Bincang Ceria: Bertukar Cerita Hari Ini',
+    purpose: 'Menguatkan literasi bahasa ekspresif, memperluas kosakata, dan membangun kedekatan emosional.',
+    howTo: `1. Duduk berhadapan santai dengan kontak mata hangat. 2. Tanyakan pertanyaan terbuka: "Momen apa yang paling bikin ananda tersenyum hari ini?". 3. Dengarkan dengan sabar tanpa memotong kalimat ananda, lalu berikan tanggapan apresiatif.`,
+    materials: 'Suasana tenang di ruang keluarga atau meja makan.',
+    duration: '10–15 menit setiap hari',
+    aspectStimulated: 'Literasi Bahasa & Komunikasi Emosional (Sosio-Emosional)',
+    skillTrained: 'Kemampuan menyusun kalimat runtut, percaya diri bercerita, dan mengenali emosi diri.',
+    activity: 'Berbincang santai bertukar cerita pengalaman berkesan harian antara anak dan orang tua.',
+    curriculumContext: 'Literasi Awal & Pengembangan Sosio-Emosional',
+  });
+
+  // Rekomendasi 3: Eksplorasi Seni & STEAM Menggunakan Bahan Alam (Loose Parts)
+  homeStimulations.push({
+    title: 'Kreasi Kolase Daun dan Ranting di Halaman',
+    purpose: 'Melatih daya cipta seni, apresiasi lingkungan alam sekitar, dan imajinasi eksploratif.',
+    howTo: `1. Ajak ananda berjalan di halaman memungut 5 lembar daun gugur dan ranting kecil. 2. Sediakan kertas gambar dan lem aman. 3. Biarkan ananda menempel dan membentuk gambar hewan, kendaraan, atau wajah sesuai imajinasinya.`,
+    materials: 'Dedaunan kering yang gugur, ranting kecil, kertas gambar, lem kertas.',
+    duration: '20–25 menit',
+    aspectStimulated: 'Seni, Kreativitas & STEAM Bahan Alam (Loose Parts)',
+    skillTrained: 'Eksplorasi sensorik bahan alam, kepekaan estetika, dan berpikir kreatif mandiri.',
+    activity: 'Membuat kolase bentuk imajinatif dari dedaunan kering yang dipungut bersama di sekitar rumah.',
+    curriculumContext: 'Seni dan Eksplorasi Lingkungan Alam Sekitar',
+  });
 
   // 11. Pesan Hangat Wali Kelas (Max 40 - 50 Kata)
   let rawTeacherMessage = '';
@@ -671,9 +878,32 @@ export function buildCanonicalReportDocument(
     overallSummary: {
       title: 'Perkembangan Ananda',
       description: summaryNarrative,
+      overallPercentage,
+      topStrengths: rawDeveloped.slice(0, 3).map((d) => `${d.aspect}: ${d.title}`),
+      emergingAreas: rawGrowth.slice(0, 3).map((g) => `${g.aspect}: ${g.title}`),
     },
     aspects,
     overallPercentage,
+    visualSummary: {
+      strengths: rawDeveloped.slice(0, 4).map((d) => d.title),
+      emerging: rawGrowth.slice(0, 3).map((g) => g.title),
+      needsReinforcement: rawGrowth.slice(0, 2).map((g) => g.recommendation || g.title),
+      mostProminentSkill: rawDeveloped[0]?.title || `Kemampuan aktif pada aspek ${topAspect.aspectTitle}`,
+      furtherStimulationPriority: rawGrowth[0]?.title || `Stimulasi terarah pada aspek ${emergingAspect.aspectTitle}`,
+    },
+    teacherNotesData: {
+      generalNote: teacherMessage,
+      positiveToMaintain: rawDeveloped.length > 0
+        ? `Pertahankan kemandirian dan antusiasme ananda dalam kegiatan ${rawDeveloped[0].title.toLowerCase()}.`
+        : 'Pertahankan antusiasme bermain dan interaksi hangat bersama teman di sekolah.',
+      areasToStrengthen: rawGrowth.length > 0
+        ? `Dukungan bersama untuk memperkuat ${rawGrowth[0].title.toLowerCase()} melalui stimulasi konsisten.`
+        : `Penguatan pada aspek ${emergingAspect.aspectTitle} melalui pembiasaan bermain di rumah.`,
+      additionalNote: teacherNotes.length > 1 ? teacherNotes[1] : undefined,
+      teacherName: teacherName,
+      principalName: principalName,
+      reportDate: todayFormatted,
+    },
     quickSummary,
     rubricGuide,
     developedPoints: developedPoints.slice(0, 4),
@@ -681,20 +911,52 @@ export function buildCanonicalReportDocument(
     homeStimulations: homeStimulations.slice(0, 3),
     evidences: selectedEvidences,
     teacherMessage,
-    signatures: {
-      parent: {
-        label: 'Orang Tua / Wali',
-        name: parentName,
-      },
-      teacher: {
-        label: 'Guru Wali Kelas',
-        name: teacherName,
-        locationAndDate: `${cityName}, ${todayFormatted}`,
-      },
-      principal: {
-        label: 'Kepala Sekolah',
-        name: principalName,
-      },
-    },
+    signatures: (() => {
+      const teacherOverride = customOverrides?.digitalSignatures?.teacher;
+      const principalOverride = customOverrides?.digitalSignatures?.principal;
+      const parentOverride = customOverrides?.digitalSignatures?.parent;
+
+      const isTeacherAuth = Boolean(teacherOverride?.isAuthorized);
+      const isPrincipalAuth = Boolean(principalOverride?.isAuthorized);
+
+      let authorizationStatus: 'UNAUTHORIZED' | 'PARTIALLY_AUTHORIZED' | 'FULLY_AUTHORIZED' =
+        'UNAUTHORIZED';
+      if (isTeacherAuth && isPrincipalAuth) {
+        authorizationStatus = 'FULLY_AUTHORIZED';
+      } else if (isTeacherAuth || isPrincipalAuth) {
+        authorizationStatus = 'PARTIALLY_AUTHORIZED';
+      }
+
+      return {
+        parent: {
+          label: 'Orang Tua / Wali',
+          name: parentOverride?.signerName || parentName,
+          signatureDataUrl: parentOverride?.signatureDataUrl || null,
+          isAuthorized: parentOverride?.isAuthorized ?? false,
+          authorizedAt: parentOverride?.authorizedAt || null,
+        },
+        teacher: {
+          label: teacherOverride?.signerTitle || 'Guru Wali Kelas',
+          name: teacherOverride?.signerName || teacherName,
+          locationAndDate:
+            teacherOverride?.locationAndDate || `${cityName}, ${todayFormatted}`,
+          nip: teacherOverride?.nip || undefined,
+          signatureDataUrl: teacherOverride?.signatureDataUrl || null,
+          isAuthorized: isTeacherAuth,
+          authorizedAt: teacherOverride?.authorizedAt || null,
+          verificationCode: teacherOverride?.verificationCode || null,
+        },
+        principal: {
+          label: principalOverride?.signerTitle || 'Kepala Sekolah',
+          name: principalOverride?.signerName || principalName,
+          nip: principalOverride?.nip || undefined,
+          signatureDataUrl: principalOverride?.signatureDataUrl || null,
+          isAuthorized: isPrincipalAuth,
+          authorizedAt: principalOverride?.authorizedAt || null,
+          verificationCode: principalOverride?.verificationCode || null,
+        },
+        authorizationStatus,
+      };
+    })(),
   };
 }

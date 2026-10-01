@@ -44,8 +44,10 @@ export async function renderRadarChartToCanvas(
     'Kognitif',
   ];
 
-  // 1. Draw Concentric Grid Rings
-  const levels = [0.25, 0.5, 0.75, 1.0];
+  // 1. Draw Concentric Grid Rings with Color-Coded Zones (Parent Friendly)
+  const levels = [1.0, 0.75, 0.5, 0.25];
+  const zoneColors = ['#F0FDF4', '#F0FDFA', '#FFFBEB', '#F8FAFC']; // BSB (Green), BSH (Teal), MB (Amber), BB (Slate)
+  
   levels.forEach((level, idx) => {
     ctx.beginPath();
     for (let i = 0; i < numAxes; i++) {
@@ -57,15 +59,13 @@ export async function renderRadarChartToCanvas(
     }
     ctx.closePath();
 
-    if (idx === 3) {
-      ctx.fillStyle = '#F8FAFC';
-      ctx.fill();
-    }
+    ctx.fillStyle = zoneColors[idx];
+    ctx.fill();
 
-    ctx.strokeStyle = idx === 3 ? '#94A3B8' : '#CBD5E1';
-    ctx.lineWidth = idx === 3 ? 1.2 : 0.8;
-    if (idx < 3) {
-      ctx.setLineDash([4, 4]);
+    ctx.strokeStyle = idx === 0 ? '#10B981' : idx === 1 ? '#0D9488' : idx === 2 ? '#F59E0B' : '#CBD5E1';
+    ctx.lineWidth = idx === 0 ? 1.4 : 0.9;
+    if (idx > 0) {
+      ctx.setLineDash([3, 3]);
     } else {
       ctx.setLineDash([]);
     }

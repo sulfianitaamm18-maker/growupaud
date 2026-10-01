@@ -2,7 +2,7 @@
 
 @page {
   size: A4 portrait;
-  margin: 10mm;
+  margin: 0;
 }
 
 /* Screen Mode A4 preview */
@@ -11,7 +11,6 @@
 #student-report-card-root,
 #student-report-card-root * {
   color-scheme: light !important;
-  /* Paksa penggunaan RGB/HEX biasa pada kontainer laporan */
   --tw-text-opacity: 1;
   color: rgb(17, 24, 39);
 }
@@ -20,7 +19,9 @@
   display: flex;
   flex-direction: column;
   align-items: center;
+  gap: 24px;
   width: 100%;
+  padding-bottom: 24px;
 }
 
 .a4-sheet,
@@ -28,18 +29,23 @@
   width: 210mm;
   min-width: 210mm;
   max-width: 210mm;
+  height: 297mm;
   min-height: 297mm;
+  max-height: 297mm;
   box-sizing: border-box;
   position: relative;
   background-color: #ffffff;
   margin-left: auto;
   margin-right: auto;
-  padding: 16mm;
+  padding: 13mm 14mm;
   font-family: 'Arial', 'Helvetica', system-ui, -apple-system, sans-serif;
   color: #0f172a;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.35), 0 8px 10px -6px rgba(0, 0, 0, 0.2);
+  border-radius: 3px;
+  overflow: hidden;
 }
 
-/* Prevent unwanted element splitting across page breaks ONLY on small elements */
+/* Prevent unwanted element splitting across page breaks */
 .indicator-card,
 .table-row,
 .aspect-table-row,
@@ -60,30 +66,72 @@
     margin: 0 !important;
     width: 210mm !important;
     height: auto !important;
+    overflow: visible !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
   }
 
-  .no-print,
+  /* Hide entire app UI, topbars, sidebars, dashboard, and modal controls */
   nav,
   header,
   aside,
   button,
-  .print\:hidden {
+  footer,
+  .no-print,
+  .print\:hidden,
+  #root > div > nav,
+  #root > div > header,
+  #root > div > main,
+  #root > div > footer {
     display: none !important;
   }
 
-  /* Reset all modal overlays in print */
+  /* Reset all modal overlays and backdrops in print */
   .fixed.inset-0,
+  .backdrop-blur-xs,
+  .report-modal-overlay,
   .overflow-y-auto {
     position: static !important;
     overflow: visible !important;
-    background: transparent !important;
+    background: #ffffff !important;
+    backdrop-filter: none !important;
     padding: 0 !important;
     margin: 0 !important;
     display: block !important;
     max-height: none !important;
     height: auto !important;
+    width: 100% !important;
+    border: none !important;
+    box-shadow: none !important;
+  }
+
+  /* Modal card wrappers reset */
+  .report-modal-dialog,
+  .report-modal-body,
+  .bg-slate-900,
+  .bg-slate-950,
+  .bg-slate-950\/90,
+  .bg-slate-950\/85 {
+    background: transparent !important;
+    border: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+    max-height: none !important;
+    height: auto !important;
+    overflow: visible !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    max-width: 100% !important;
+  }
+
+  /* CRITICAL: Neutralize zoom/scale transform when printing */
+  .origin-top,
+  #report-zoom-wrapper,
+  .print\:transform-none,
+  [style*="scale"] {
+    transform: none !important;
+    margin: 0 !important;
+    padding: 0 !important;
     width: 100% !important;
   }
 
@@ -91,25 +139,38 @@
     gap: 0 !important;
     display: block !important;
     width: 100% !important;
+    margin: 0 !important;
+    padding: 0 !important;
   }
 
   .a4-sheet,
   .report-page {
-    width: 100% !important;
-    max-width: 100% !important;
-    min-width: 100% !important;
-    min-height: auto !important;
-    height: auto !important;
-    margin: 0 !important;
-    padding: 0 !important;
+    width: 210mm !important;
+    min-width: 210mm !important;
+    max-width: 210mm !important;
+    height: 297mm !important;
+    min-height: 297mm !important;
+    max-height: 297mm !important;
+    margin: 0 auto !important;
+    padding: 12mm 14mm !important;
+    box-sizing: border-box !important;
     box-shadow: none !important;
     border: none !important;
     border-radius: 0 !important;
-    overflow: visible !important;
+    overflow: hidden !important;
     transform: none !important;
     background-color: #ffffff !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid !important;
+    page-break-after: always !important;
+    break-after: page !important;
     -webkit-print-color-adjust: exact !important;
     print-color-adjust: exact !important;
+  }
+
+  .report-page:last-child {
+    page-break-after: auto !important;
+    break-after: auto !important;
   }
 
   .indicator-card,
@@ -124,4 +185,5 @@
     break-inside: avoid !important;
   }
 }
+
 

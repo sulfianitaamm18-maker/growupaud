@@ -15,6 +15,9 @@ import {
   FileText,
   Layers,
   Info,
+  ShieldCheck,
+  PenTool,
+  Stamp,
 } from 'lucide-react';
 import { StudentProfile, ObservationRecord, UserProfile } from '../../types';
 import { schoolStore } from '../../services/schoolStore';
@@ -23,6 +26,13 @@ import { canViewReport } from '../../utils/authorization';
 import type { GeneratedPdfResult } from '../../services/pdfReportGenerator';
 import { StudentReportCard } from './StudentReportCard';
 import { QuickAddDocumentationModal } from '../common/QuickAddDocumentationModal';
+import {
+  digitalSignatureService,
+  DigitalSignatureData,
+  ReportAuthorizationRecord,
+} from '../../services/digitalSignatureService';
+import { ReportAuthorizationFooterBar } from './ReportAuthorizationFooterBar';
+import { DigitalSignatureModal } from './DigitalSignatureModal';
 
 export interface ReportPreviewModalProps {
   isOpen: boolean;
@@ -58,10 +68,30 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
     return schoolStore.getSchoolProfile();
   }, []);
 
-  const [customSchoolName, setCustomSchoolName] = useState('');
+  const [customSchoolName, setCustomSchoolName] = useState(schoolProfile.schoolName || '');
   const [customSubtitle, setCustomSubtitle] = useState('');
-  const [customAddress, setCustomAddress] = useState('');
-  const [logoUrl, setLogoUrl] = useState<string | null>(null);
+  const [customAddress, setCustomAddress] = useState(schoolProfile.address || '');
+  const [logoUrl, setLogoUrl] = useState<string | null>(schoolProfile.schoolLogo || null);
+  const [logoSize, setLogoSize] = useState<'SMALL' | 'MEDIUM' | 'LARGE'>((schoolProfile as any).logoSize || 'MEDIUM');
+  const [logoPosition, setLogoPosition] = useState<'LEFT' | 'CENTER'>((schoolProfile as any).logoPosition || 'LEFT');
+  const [isSavingKop, setIsSavingKop] = useState(false);
+
+  // Digital Signature & Official Authorization State
+  const [authorization, setAuthorization] = useState<ReportAuthorizationRecord | null>(null);
+  const [isSigningModalOpen, setIsSigningModalOpen] = useState(false);
+  const [signingTargetRole, setSigningTargetRole] = useState<'TEACHER' | 'PRINCIPAL'>('TEACHER');
+
+  // Load existing authorization from storage for this student and academic period
+  useEffect(() => {
+    if (student) {
+      const rec = digitalSignatureService.getStoredAuthorization(
+        student.id,
+        schoolProfile.academicYear,
+        schoolProfile.semester
+      );
+      setAuthorization(rec);
+    }
+  }, [student, schoolProfile.academicYear, schoolProfile.semester]);
 
   // Calculated Report Data (Canonical Report Document)
   const reportData = useMemo(() => {
@@ -69,8 +99,13 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
       schoolName: customSchoolName || undefined,
       schoolAddress: customAddress || undefined,
       logoUrl: logoUrl || undefined,
+      digitalSignatures: {
+        teacher: authorization?.teacherSignature,
+        principal: authorization?.principalSignature,
+        parent: authorization?.parentSignature,
+      },
     });
-  }, [student, observations, schoolProfile, customSchoolName, customAddress, logoUrl]);
+  }, [student, observations, schoolProfile, customSchoolName, customAddress, logoUrl, authorization]);
 
   const canonical = reportData.canonicalDoc;
 
@@ -162,15 +197,8 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
     setIsGeneratingPdf(true);
     setSuccessMessage(null);
     try {
-      if (viewMode === 'html') {
-        const fileName = `${canonical.metadata.fileBaseName}.pdf`;
-        const { exportReportToPdfFromHtml } = await import('../../utils/pdfExport');
-        await exportReportToPdfFromHtml({
-          containerElementId: 'report-content',
-          fileName,
-          canonicalDoc: canonical,
-        });
-      } else if (pdfResult) {
+      if (pdfResult) {
+        // Master Vector Engine: Pure A4 vector layout, crystal clear, exact margins
         pdfResult.engine.save(pdfResult.fileName);
       } else {
         const { generateStudentReportPdf } = await import('../../services/pdfReportGenerator');
@@ -190,7 +218,21 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
       setTimeout(() => setSuccessMessage(null), 4000);
     } catch (err: any) {
       console.error('PDF Generation Error:', err);
-      alert('Gagal membuat file PDF. Silakan coba lagi.');
+      // Graceful fallback to HTML per-page canvas export
+      try {
+        const fileName = `${canonical.metadata.fileBaseName}.pdf`;
+        const { exportReportToPdfFromHtml } = await import('../../utils/pdfExport');
+        await exportReportToPdfFromHtml({
+          pageElementIds: ['report-page-1', 'report-page-2', 'report-page-3'],
+          containerElementId: 'report-content',
+          fileName,
+          canonicalDoc: canonical,
+        });
+        setSuccessMessage(`Laporan PDF A4 Ananda ${student.name} berhasil diunduh.`);
+        setTimeout(() => setSuccessMessage(null), 4000);
+      } catch (fallbackErr) {
+        alert('Gagal membuat file PDF. Silakan coba lagi.');
+      }
     } finally {
       setIsGeneratingPdf(false);
     }
@@ -230,11 +272,120 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
 
   const isTeacherOrAdmin = currentUser?.role === 'GURU' || currentUser?.role === 'ADMIN';
 
+  const canAuthorize =
+    !currentUser ||
+    currentUser.role === 'GURU' ||
+    currentUser.role === 'KEPALA_SEKOLAH' ||
+    currentUser.role === 'ADMIN' ||
+    currentUser.role === 'SUPER_ADMIN';
+
+  const handleOpenSignModal = (targetRole: 'TEACHER' | 'PRINCIPAL') => {
+    setSigningTargetRole(targetRole);
+    setIsSigningModalOpen(true);
+  };
+
+  const handleAuthorized = (data: DigitalSignatureData) => {
+    if (!student) return;
+    const currentRec: ReportAuthorizationRecord = authorization || {
+      studentId: student.id,
+      academicYear: schoolProfile.academicYear || canonical.metadata.academicYear,
+      semester: schoolProfile.semester || canonical.metadata.semester,
+      teacherSignature: null,
+      principalSignature: null,
+      parentSignature: null,
+      status: 'UNAUTHORIZED',
+      lastUpdated: new Date().toISOString(),
+    };
+
+    if (data.role === 'TEACHER') {
+      currentRec.teacherSignature = data;
+    } else if (data.role === 'PRINCIPAL') {
+      currentRec.principalSignature = data;
+    }
+
+    const hasTeacher = Boolean(currentRec.teacherSignature?.isAuthorized);
+    const hasPrincipal = Boolean(currentRec.principalSignature?.isAuthorized);
+
+    currentRec.status =
+      hasTeacher && hasPrincipal
+        ? 'FULLY_AUTHORIZED'
+        : hasTeacher || hasPrincipal
+        ? 'PARTIALLY_AUTHORIZED'
+        : 'UNAUTHORIZED';
+    currentRec.lastUpdated = new Date().toISOString();
+
+    digitalSignatureService.saveStoredAuthorization(currentRec);
+    setAuthorization({ ...currentRec });
+
+    setSuccessMessage(
+      `Otorisasi resmi sebagai ${data.signerTitle} (${data.signerName}) berhasil disahkan pada laporan.`
+    );
+    setTimeout(() => setSuccessMessage(null), 4000);
+  };
+
+  const handleRevokeSignature = (targetRole: 'TEACHER' | 'PRINCIPAL') => {
+    if (!student) return;
+    const updated = digitalSignatureService.removeSignature(
+      student.id,
+      schoolProfile.academicYear || canonical.metadata.academicYear,
+      schoolProfile.semester || canonical.metadata.semester,
+      targetRole
+    );
+    setAuthorization({ ...updated });
+    setSuccessMessage(
+      `Otorisasi ${targetRole === 'PRINCIPAL' ? 'Kepala Sekolah' : 'Guru'} telah dibatalkan.`
+    );
+    setTimeout(() => setSuccessMessage(null), 4000);
+  };
+
+  const handleSaveKopPermanently = async () => {
+    setIsSavingKop(true);
+    try {
+      await schoolStore.saveKopSettings({
+        schoolName: customSchoolName || undefined,
+        address: customAddress || undefined,
+        schoolLogo: logoUrl || undefined,
+        logoSize,
+        logoPosition,
+      });
+      setSuccessMessage('Pengaturan Kop Surat & Logo Sekolah berhasil disimpan permanen ke sistem.');
+      setTimeout(() => setSuccessMessage(null), 4000);
+      setIsEditingKop(false);
+    } catch (err: any) {
+      console.error('Failed to save Kop settings:', err);
+      alert('Gagal menyimpan pengaturan Kop: ' + (err.message || 'Terjadi kesalahan.'));
+    } finally {
+      setIsSavingKop(false);
+    }
+  };
+
+  const handleTogglePublish = (publish: boolean) => {
+    if (!student) return;
+    const academicYear = schoolProfile.academicYear || canonical.metadata.academicYear;
+    const semester = schoolProfile.semester || canonical.metadata.semester;
+    const updated = digitalSignatureService.setReportPublished(
+      student.id,
+      academicYear,
+      semester,
+      publish
+    );
+    setAuthorization({ ...updated });
+    setSuccessMessage(
+      publish
+        ? 'Laporan perkembangan resmi Ananda telah BERHASIL DIPUBLIKASIKAN ke Portal Orang Tua.'
+        : 'Publikasi laporan ditarik kembali. Dokumen kini kembali berstatus draf internal.'
+    );
+    setTimeout(() => setSuccessMessage(null), 4500);
+  };
+
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-fadeIn">
-      <div className="bg-slate-900 rounded-3xl max-w-6xl w-full max-h-[96vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden">
+    <div
+      id="report-preview-modal-overlay"
+      className="report-modal-overlay fixed inset-0 z-50 overflow-y-auto bg-slate-950/85 backdrop-blur-xs flex items-center justify-center p-2 sm:p-4 animate-fadeIn print:p-0 print:m-0 print:bg-white print:static print:block"
+    >
+      <div className="report-modal-dialog bg-slate-900 rounded-3xl max-w-6xl w-full max-h-[96vh] flex flex-col shadow-2xl border border-slate-700/80 overflow-hidden print:border-none print:shadow-none print:rounded-none print:bg-white print:max-w-none print:max-h-none print:overflow-visible">
         {/* Top Control Bar */}
-        <div className="px-5 py-3 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0 border-b border-slate-800 shadow-md no-print">
+        <div className="px-5 py-3 bg-slate-900 text-white flex flex-wrap items-center justify-between gap-3 shrink-0 border-b border-slate-800 shadow-md no-print print:hidden">
           <div className="flex items-center gap-2.5">
             <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
             <div>
@@ -332,6 +483,56 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
               </button>
             )}
 
+            {canAuthorize && (
+              <div className="flex items-center gap-1.5">
+                <button
+                  id="btn-sign-teacher-top"
+                  type="button"
+                  onClick={() => handleOpenSignModal('TEACHER')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer active:scale-95 ${
+                    authorization?.teacherSignature?.isAuthorized
+                      ? 'bg-sky-950/80 text-sky-300 border-sky-600 hover:bg-sky-900/80'
+                      : 'bg-sky-600 hover:bg-sky-500 text-white border-sky-500 shadow-xs'
+                  }`}
+                  title={
+                    authorization?.teacherSignature?.isAuthorized
+                      ? 'Guru telah menandatangani (Klik untuk ubah)'
+                      : 'Klik untuk membubuhkan Tanda Tangan Guru'
+                  }
+                >
+                  <PenTool className="w-3.5 h-3.5" />
+                  <span>
+                    {authorization?.teacherSignature?.isAuthorized
+                      ? '✓ Guru (Sah)'
+                      : '+ Tanda Tangan Guru'}
+                  </span>
+                </button>
+
+                <button
+                  id="btn-sign-principal-top"
+                  type="button"
+                  onClick={() => handleOpenSignModal('PRINCIPAL')}
+                  className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl text-xs font-bold transition-all border cursor-pointer active:scale-95 ${
+                    authorization?.principalSignature?.isAuthorized
+                      ? 'bg-emerald-950/80 text-emerald-300 border-emerald-600 hover:bg-emerald-900/80'
+                      : 'bg-emerald-600 hover:bg-emerald-500 text-white border-emerald-500 shadow-xs'
+                  }`}
+                  title={
+                    authorization?.principalSignature?.isAuthorized
+                      ? 'Kepala Sekolah telah mengesahkan (Klik untuk ubah)'
+                      : 'Klik untuk pengesahan resmi Kepala Sekolah'
+                  }
+                >
+                  <Stamp className="w-3.5 h-3.5" />
+                  <span>
+                    {authorization?.principalSignature?.isAuthorized
+                      ? '✓ KS (Sah)'
+                      : '+ Sahkan (KS)'}
+                  </span>
+                </button>
+              </div>
+            )}
+
             <button
               onClick={handlePrint}
               className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-bold transition-all border border-slate-700 cursor-pointer"
@@ -340,18 +541,20 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
               <span>Cetak (A4)</span>
             </button>
 
-            <button
-              onClick={handleDownloadDocx}
-              disabled={isGeneratingDocx}
-              className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
-            >
-              {isGeneratingDocx ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Download className="w-3.5 h-3.5" />
-              )}
-              <span>Word (.docx)</span>
-            </button>
+            {currentUser?.role !== 'ORANG_TUA' && (
+              <button
+                onClick={handleDownloadDocx}
+                disabled={isGeneratingDocx}
+                className="inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl bg-sky-600 hover:bg-sky-500 text-white text-xs font-bold transition-all shadow-md cursor-pointer disabled:opacity-50"
+              >
+                {isGeneratingDocx ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Download className="w-3.5 h-3.5" />
+                )}
+                <span>Word (.docx)</span>
+              </button>
+            )}
 
             <button
               onClick={handleDownloadPdf}
@@ -393,75 +596,156 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
 
         {/* Kop Surat Inline Editor */}
         {isEditingKop && (
-          <div className="p-4 bg-slate-800/90 border-b border-slate-700 text-white grid grid-cols-1 md:grid-cols-4 gap-3 text-xs no-print animate-fadeIn">
-            <div>
-              <label className="block text-[11px] text-slate-300 font-semibold mb-1">
-                Nama Satuan PAUD:
-              </label>
-              <input
-                type="text"
-                value={customSchoolName}
-                onChange={(e) => setCustomSchoolName(e.target.value)}
-                placeholder={activeSchoolName}
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-300 font-semibold mb-1">
-                Sub-judul / Semester:
-              </label>
-              <input
-                type="text"
-                value={customSubtitle}
-                onChange={(e) => setCustomSubtitle(e.target.value)}
-                placeholder={activeSubtitle}
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-300 font-semibold mb-1">
-                Alamat Sekolah:
-              </label>
-              <input
-                type="text"
-                value={customAddress}
-                onChange={(e) => setCustomAddress(e.target.value)}
-                placeholder={activeAddress}
-                className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
-              />
-            </div>
-            <div>
-              <label className="block text-[11px] text-slate-300 font-semibold mb-1">
-                Upload Logo Sekolah:
-              </label>
+          <div className="p-4 bg-slate-800/95 border-b border-slate-700 text-white space-y-3 text-xs no-print animate-fadeIn">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-2">
+              <span className="font-bold text-sky-400 flex items-center gap-1.5 text-xs">
+                <Building2 className="w-4 h-4" />
+                <span>Pengaturan Kop Surat &amp; Logo Resmi Satuan PAUD</span>
+              </span>
               <div className="flex items-center gap-2">
-                <label className="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-slate-700 border border-slate-600 rounded-lg cursor-pointer text-slate-300 text-xs">
-                  <Upload className="w-3.5 h-3.5" />
-                  <span className="truncate">{logoUrl ? 'Ganti Logo' : 'Pilih Logo'}</span>
-                  <input
-                    type="file"
-                    accept="image/*"
-                    onChange={handleLogoUpload}
-                    className="hidden"
-                  />
-                </label>
-                {logoUrl && (
-                  <button
-                    type="button"
-                    onClick={() => setLogoUrl(null)}
-                    className="px-2 py-1.5 text-rose-400 hover:bg-slate-900 rounded-lg border border-slate-600"
-                    title="Hapus Logo"
-                  >
-                    ✕
-                  </button>
-                )}
+                <button
+                  type="button"
+                  onClick={handleSaveKopPermanently}
+                  disabled={isSavingKop}
+                  className="inline-flex items-center gap-1.5 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-bold text-xs shadow-xs cursor-pointer disabled:opacity-50"
+                >
+                  {isSavingKop ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileCheck className="w-3.5 h-3.5" />}
+                  <span>Simpan Kop &amp; Logo Permanen</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setIsEditingKop(false)}
+                  className="p-1 text-slate-400 hover:text-white rounded-md"
+                >
+                  ✕
+                </button>
               </div>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[11px] text-slate-300 font-semibold mb-1">
+                  Nama Satuan PAUD:
+                </label>
+                <input
+                  type="text"
+                  value={customSchoolName}
+                  onChange={(e) => setCustomSchoolName(e.target.value)}
+                  placeholder={activeSchoolName}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-300 font-semibold mb-1">
+                  Sub-judul / Semester:
+                </label>
+                <input
+                  type="text"
+                  value={customSubtitle}
+                  onChange={(e) => setCustomSubtitle(e.target.value)}
+                  placeholder={activeSubtitle}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-300 font-semibold mb-1">
+                  Alamat Sekolah:
+                </label>
+                <input
+                  type="text"
+                  value={customAddress}
+                  onChange={(e) => setCustomAddress(e.target.value)}
+                  placeholder={activeAddress}
+                  className="w-full px-2.5 py-1.5 rounded-lg bg-slate-900 border border-slate-600 text-white text-xs focus:ring-1 focus:ring-emerald-500"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] text-slate-300 font-semibold mb-1">
+                  Logo Satuan PAUD:
+                </label>
+                <div className="flex items-center gap-2">
+                  <label className="flex-1 flex items-center justify-center gap-1 px-2.5 py-1.5 bg-slate-900 hover:bg-slate-700 border border-slate-600 rounded-lg cursor-pointer text-slate-300 text-xs">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span className="truncate">{logoUrl ? 'Ganti Logo' : 'Pilih File Logo'}</span>
+                    <input
+                      type="file"
+                      accept="image/*"
+                      onChange={handleLogoUpload}
+                      className="hidden"
+                    />
+                  </label>
+                  {logoUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setLogoUrl(null)}
+                      className="px-2 py-1.5 text-rose-400 hover:bg-slate-900 rounded-lg border border-slate-600"
+                      title="Hapus Logo"
+                    >
+                      ✕
+                    </button>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Sub-bar: Ukuran Logo, Posisi Logo & Preview Thumbnail */}
+            <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-slate-700/60 text-[11px]">
+              <div className="flex items-center gap-4">
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">Ukuran Logo:</span>
+                  {(['SMALL', 'MEDIUM', 'LARGE'] as const).map((sz) => (
+                    <button
+                      key={sz}
+                      type="button"
+                      onClick={() => setLogoSize(sz)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        logoSize === sz
+                          ? 'bg-sky-600 text-white'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-700'
+                      }`}
+                    >
+                      {sz === 'SMALL' ? 'Kecil' : sz === 'MEDIUM' ? 'Sedang' : 'Besar'}
+                    </button>
+                  ))}
+                </div>
+
+                <div className="flex items-center gap-1.5">
+                  <span className="text-slate-400">Posisi:</span>
+                  {(['LEFT', 'CENTER'] as const).map((pos) => (
+                    <button
+                      key={pos}
+                      type="button"
+                      onClick={() => setLogoPosition(pos)}
+                      className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                        logoPosition === pos
+                          ? 'bg-sky-600 text-white'
+                          : 'bg-slate-900 text-slate-400 hover:text-slate-200 border border-slate-700'
+                      }`}
+                    >
+                      {pos === 'LEFT' ? 'Kiri' : 'Tengah'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {logoUrl && (
+                <div className="flex items-center gap-2 bg-slate-900/80 px-2.5 py-1 rounded-lg border border-slate-700">
+                  <span className="text-[10px] text-slate-400">Pratinjau Logo:</span>
+                  <img
+                    src={logoUrl}
+                    alt="Logo Preview"
+                    className="w-5 h-5 object-contain rounded"
+                    referrerPolicy="no-referrer"
+                  />
+                  <span className="text-[10px] text-emerald-400 font-semibold">Tersedia</span>
+                </div>
+              )}
             </div>
           </div>
         )}
 
         {/* Modal Body: Document Preview Viewport */}
-        <div className="flex-1 overflow-y-auto p-4 md:p-8 bg-slate-950/90 flex flex-col items-center custom-scrollbar">
+        <div className="report-modal-body flex-1 overflow-y-auto p-4 md:p-8 bg-slate-950/90 flex flex-col items-center custom-scrollbar print:p-0 print:m-0 print:bg-white print:overflow-visible">
           {viewMode === 'pdf' ? (
             <div className="w-full h-full min-h-[78vh] flex flex-col items-center justify-center">
               {isRenderingPdfMaster ? (
@@ -493,22 +777,60 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
             </div>
           ) : (
             <div
+              id="report-zoom-wrapper"
               style={{
                 transform: `scale(${zoomScale})`,
                 transformOrigin: 'top center',
                 transition: 'transform 0.15s ease-out',
               }}
-              className="origin-top"
+              className="origin-top print:transform-none"
             >
               <StudentReportCard
                 canonical={canonical}
                 canEdit={isTeacherOrAdmin}
                 onAddDocumentation={() => setIsAddingDoc(true)}
+                onOpenSignModal={handleOpenSignModal}
               />
             </div>
           )}
         </div>
+
+        {/* Kolom Otorisasi & Tanda Tangan Digital Resmi (Bawah Modal) */}
+        <ReportAuthorizationFooterBar
+          authorization={authorization}
+          teacherName={canonical.signatures.teacher.name}
+          principalName={canonical.signatures.principal.name}
+          canAuthorize={canAuthorize}
+          onOpenSignModal={handleOpenSignModal}
+          onRevokeSignature={handleRevokeSignature}
+          onTogglePublish={handleTogglePublish}
+        />
       </div>
+
+      {/* Digital Signature Pad Modal */}
+      {isSigningModalOpen && (
+        <DigitalSignatureModal
+          isOpen={isSigningModalOpen}
+          onClose={() => setIsSigningModalOpen(false)}
+          studentId={student.id}
+          studentName={student.name}
+          academicYear={schoolProfile.academicYear || canonical.metadata.academicYear}
+          semester={schoolProfile.semester || canonical.metadata.semester}
+          schoolName={canonical.school.name}
+          defaultRole={signingTargetRole}
+          initialTeacherName={
+            currentUser?.role === 'GURU'
+              ? currentUser.name
+              : canonical.signatures.teacher.name
+          }
+          initialPrincipalName={
+            currentUser?.role === 'KEPALA_SEKOLAH'
+              ? currentUser.name
+              : canonical.signatures.principal.name
+          }
+          onAuthorized={handleAuthorized}
+        />
+      )}
 
       {/* Quick Add Documentation Modal */}
       {isAddingDoc && (
@@ -526,3 +848,5 @@ export const ReportPreviewModal: React.FC<ReportPreviewModalProps> = ({
     </div>
   );
 };
+
+export default ReportPreviewModal;

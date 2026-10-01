@@ -91,20 +91,40 @@ export function canViewStudent(user: UserProfile, student: StudentProfile): bool
   }
 
   // 4. ORANG TUA / PARENT: HANYA BOLEH melihat anaknya sendiri
-  // Sumber otoritatif tunggal adalah data siswa: students/{studentId}.parentIds
+  // Sumber otoritatif tunggal adalah data siswa: students/{studentId}.parentIds, legacy parentId, atau kecocokan data email/UID
   if (role === 'ORANG_TUA' || role === 'PARENT') {
-    const parentUid = user.id;
+    const parentUid = user.id || user.uid || (user as any).firebaseUid;
     if (!parentUid) return false;
 
-    // OTORITATIF: Hanya percaya atribut pada objek student (student.parentIds atau legacy student.parentId)
-    // Field pada userProfile (studentIds, childId, linkedStudentIds, parentStudentIds)
-    // TIDAK BOLEH dijadikan penentu otorisasi
+    // 1. Otoritatif langsung: parentIds array memuat UID orang tua
     if (student.parentIds && Array.isArray(student.parentIds) && student.parentIds.includes(parentUid)) {
       return true;
     }
+
+    // 2. Otoritatif legacy: parentId cocok dengan UID orang tua
     if ((student as any).parentId && (student as any).parentId === parentUid) {
       return true;
     }
+
+    // 3. Kecocokan email orang tua yang tertera pada data siswa
+    if (
+      student.parentEmail &&
+      user.email &&
+      student.parentEmail.trim().toLowerCase() === user.email.trim().toLowerCase()
+    ) {
+      return true;
+    }
+
+    // 4. Hubungan melalui profil akun orang tua (linkedStudentIds, studentIds, childId)
+    const linkedIds = new Set<string>([
+      ...(user.linkedStudentIds || []),
+      ...(user.studentIds || []),
+      ...(user.childId ? [user.childId] : []),
+    ]);
+    if (student.id && linkedIds.has(student.id)) {
+      return true;
+    }
+
     return false;
   }
 
@@ -282,6 +302,20 @@ export function canManageSchoolData(user: UserProfile): boolean {
   if (!user) return false;
   const role = (user.role || '').toUpperCase();
   return role === 'ADMIN' || role === 'SUPER_ADMIN' || role === 'OPERATOR';
+}
+
+export function canManageReportKop(user: UserProfile): boolean {
+  if (!user) return false;
+  const role = (user.role || '').toUpperCase();
+  return (
+    role === 'ADMIN' ||
+    role === 'SUPER_ADMIN' ||
+    role === 'OPERATOR' ||
+    role === 'PRINCIPAL' ||
+    role === 'KEPALA_SEKOLAH' ||
+    role === 'TEACHER' ||
+    role === 'GURU'
+  );
 }
 
 export function validateSchoolAccess(user: UserProfile, targetSchoolId?: string): boolean {

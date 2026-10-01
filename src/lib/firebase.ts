@@ -1,6 +1,6 @@
 import { initializeApp, getApps, getApp, FirebaseApp } from 'firebase/app';
 import { getAuth, Auth, updatePassword } from 'firebase/auth';
-import { getFirestore, Firestore } from 'firebase/firestore';
+import { getFirestore, initializeFirestore, Firestore } from 'firebase/firestore';
 
 const env =
   (typeof import.meta !== 'undefined' && (import.meta as any).env) ||
@@ -22,7 +22,17 @@ if (!firebaseConfig.apiKey || !firebaseConfig.projectId) {
 
 export const app: FirebaseApp = !getApps().length ? initializeApp(firebaseConfig) : getApp();
 export const auth: Auth = getAuth(app);
-export const db: Firestore = getFirestore(app);
+
+// Initialize Firestore with auto-detect long polling to prevent WebChannelConnection and RPC Listen dropouts
+let firestoreDb: Firestore;
+try {
+  firestoreDb = initializeFirestore(app, {
+    experimentalAutoDetectLongPolling: true,
+  });
+} catch (e) {
+  firestoreDb = getFirestore(app);
+}
+export const db: Firestore = firestoreDb;
 export { updatePassword };
 
 /**

@@ -259,6 +259,20 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 80, after: 40 } }),
 
+          // BAGIAN 1: IDENTITAS SISWA
+          new Paragraph({
+            spacing: { before: 60, after: 30 },
+            children: [
+              new TextRun({
+                text: 'Bagian 1: Identitas Siswa',
+                bold: true,
+                size: 19,
+                color: '0369A1', // sky-700
+                font: typography.primaryFont,
+              }),
+            ],
+          }),
+
           // INFORMASI PESERTA DIDIK TABLE
           new Table({
             width: { size: 100, type: WidthType.PERCENTAGE },
@@ -366,15 +380,15 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 80, after: 40 } }),
 
-          // I. GAMBARAN PERKEMBANGAN ANANDA
+          // BAGIAN 2: RINGKASAN PERKEMBANGAN
           new Paragraph({
             spacing: { before: 60, after: 40 },
             children: [
               new TextRun({
-                text: 'I. PERKEMBANGAN ANANDA (GAMBARAN MENYELURUH)',
+                text: 'Bagian 2: Ringkasan Perkembangan',
                 bold: true,
-                size: 18, // 9pt
-                color: '0F172A',
+                size: 19,
+                color: '0369A1', // sky-700
                 font: typography.primaryFont,
               }),
             ],
@@ -417,15 +431,15 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 80, after: 40 } }),
 
-          // II. GRAFIK PERKEMBANGAN & RINGKASAN 6 ASPEK PAUD (EMBEDDED VISUAL CHART)
+          // BAGIAN 3: GRAFIK PERKEMBANGAN ASPEK
           new Paragraph({
             spacing: { before: 60, after: 40 },
             children: [
               new TextRun({
-                text: 'II. GRAFIK PERKEMBANGAN & RINGKASAN 6 ASPEK PAUD',
+                text: 'Bagian 3: Grafik Perkembangan Aspek',
                 bold: true,
-                size: 18,
-                color: '0F172A',
+                size: 19,
+                color: '0369A1', // sky-700
                 font: typography.primaryFont,
               }),
             ],
@@ -568,14 +582,26 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 80, after: 40 } }),
 
-          // III. YANG SUDAH BERKEMBANG
+          // BAGIAN 4: VISUAL SUMMARY
           new Paragraph({
             spacing: { before: 60, after: 30 },
             children: [
               new TextRun({
-                text: 'III. YANG SUDAH BERKEMBANG (KEKUATAN UTAMA ANANDA)',
+                text: 'Bagian 4: Visual Summary',
                 bold: true,
-                size: 18,
+                size: 19,
+                color: '0369A1', // sky-700
+                font: typography.primaryFont,
+              }),
+            ],
+          }),
+          new Paragraph({
+            spacing: { before: 20, after: 20 },
+            children: [
+              new TextRun({
+                text: 'Kekuatan Utama Ananda:',
+                bold: true,
+                size: 16,
                 color: '065F46', // Emerald-800
                 font: typography.primaryFont,
               }),
@@ -624,15 +650,15 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 60, after: 30 } }),
 
-          // Section V: PERKEMBANGAN SPESIFIK 6 ASPEK (KURIKULUM MERDEKA)
+          // BAGIAN 6: DETAIL CAPAIAN ASPEK
           new Paragraph({
             spacing: { before: 40, after: 30 },
             children: [
               new TextRun({
-                text: 'V. PERKEMBANGAN SPESIFIK 6 ASPEK (KURIKULUM MERDEKA)',
+                text: 'Bagian 6: Detail Capaian Aspek',
                 bold: true,
-                size: 18,
-                color: '0F172A',
+                size: 19,
+                color: '0369A1', // sky-700
                 font: typography.primaryFont,
               }),
             ],
@@ -828,15 +854,15 @@ export async function generateStudentReportDocx(options: GenerateDocxOptions): P
           // Spacer
           new Paragraph({ spacing: { before: 50, after: 20 } }),
 
-          // PESAN WALI KELAS UNTUK ANANDA & KELUARGA
+          // BAGIAN 7: PESAN & REKOMENDASI GURU
           new Paragraph({
             spacing: { before: 30, after: 20 },
             children: [
               new TextRun({
-                text: 'PESAN WALI KELAS UNTUK ANANDA & KELUARGA',
+                text: 'Bagian 7: Pesan & Rekomendasi Guru',
                 bold: true,
-                size: 17,
-                color: '78350F',
+                size: 19,
+                color: '0369A1', // sky-700
                 font: typography.primaryFont,
               }),
             ],

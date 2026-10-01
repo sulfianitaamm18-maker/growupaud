@@ -75,6 +75,23 @@ export const annualReportService = {
   },
 
   /**
+   * Mengambil laporan tahunan untuk satu siswa tertentu (aman untuk hak akses Orang Tua / Guru)
+   */
+  async getAnnualReportsByStudent(studentId: string): Promise<AnnualReport[]> {
+    if (!auth.currentUser) return [];
+    try {
+      const colRef = collection(db, COLLECTION_NAME);
+      const q = query(colRef, where('studentId', '==', studentId));
+      const snap = await getDocs(q);
+      const list = snap.docs.map((d) => d.data() as AnnualReport);
+      return list.sort((a, b) => (b.academicYearName || '').localeCompare(a.academicYearName || ''));
+    } catch (err) {
+      console.warn('Gagal mengambil laporan tahunan siswa:', err);
+      return [];
+    }
+  },
+
+  /**
    * Susun Laporan Tahunan menggabungkan Semester 1 dan Semester 2
    */
   async generateAnnualReport(
@@ -172,6 +189,18 @@ export const annualReportService = {
    */
   async saveAnnualReport(report: AnnualReport): Promise<AnnualReport> {
     const docRef = doc(db, COLLECTION_NAME, report.id);
+
+    // Cek apakah sudah FINAL di database. Jika sudah FINAL dan tidak ada override, tolak overwrite!
+    const existingSnap = await getDoc(docRef);
+    if (existingSnap.exists()) {
+      const existing = existingSnap.data() as AnnualReport;
+      if (existing.isFinal && !report.isFinal) {
+        throw new Error(
+          'Laporan tahunan ini sudah berstatus FINAL (terkunci). Keputusan dan catatan tidak dapat diubah sembarangan.'
+        );
+      }
+    }
+
     const payload = {
       ...report,
       updatedAt: new Date().toISOString(),

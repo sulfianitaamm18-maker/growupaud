@@ -11,7 +11,7 @@ import {
 
 interface GuruQuickActionsProps {
   onOpenNewObservation: () => void;
-  onNavigateSection: (section: 'STUDENTS' | 'PORTFOLIO' | 'SCHEDULE' | 'REPORT' | 'CALENDAR' | 'PLANNER') => void;
+  onNavigateSection: (section: 'STUDENTS' | 'PORTFOLIO' | 'REPORT' | 'CALENDAR' | 'PLANNER') => void;
 }
 
 export const GuruQuickActions: React.FC<GuruQuickActionsProps> = ({
@@ -29,7 +29,7 @@ export const GuruQuickActions: React.FC<GuruQuickActionsProps> = ({
         </span>
       </div>
 
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
         <button
           onClick={onOpenNewObservation}
           className="p-3.5 rounded-2xl bg-gradient-to-br from-emerald-600 to-teal-700 hover:from-emerald-700 hover:to-teal-800 text-white font-bold text-xs shadow-md shadow-emerald-600/20 transition-all flex flex-col items-center justify-center text-center gap-2 group active:scale-95 cursor-pointer"
@@ -68,16 +68,6 @@ export const GuruQuickActions: React.FC<GuruQuickActionsProps> = ({
             <FolderHeart className="w-5 h-5" />
           </div>
           <span>Portofolio Anak</span>
-        </button>
-
-        <button
-          onClick={() => onNavigateSection('SCHEDULE')}
-          className="p-3.5 rounded-2xl bg-slate-50 hover:bg-teal-50/70 border border-slate-200 hover:border-teal-300 text-slate-800 font-bold text-xs transition-all flex flex-col items-center justify-center text-center gap-2 group cursor-pointer"
-        >
-          <div className="p-2 rounded-xl bg-teal-100 text-teal-700 group-hover:scale-110 transition-transform">
-            <Clock className="w-5 h-5" />
-          </div>
-          <span>Jadwal Hari Ini</span>
         </button>
 
         <button

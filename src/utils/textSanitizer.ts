@@ -97,3 +97,37 @@ export function sanitizeForPdf(input: string | null | undefined): string {
 
   return text;
 }
+
+/**
+ * Extracts kelurahan/desa for formal Indonesian document signature lines.
+ * Replaces street names (Jl., Jalan) with Kelurahan format per national reporting guidelines.
+ */
+export function extractKelurahanAddress(address?: string | null, defaultCity = 'Makassar'): string {
+  if (!address || !address.trim()) {
+    return `Kelurahan ${defaultCity}`;
+  }
+  const clean = sanitizeReportText(address);
+  // 1. Explicit Kelurahan / Kel.
+  const kelMatch = clean.match(/(?:Kelurahan|Kel\.)\s*([^,.\n]+)/i);
+  if (kelMatch && kelMatch[1]) {
+    const kelName = kelMatch[1].trim();
+    return `Kelurahan ${kelName.replace(/^Kelurahan\s+/i, '').replace(/^Kel\.\s*/i, '')}`;
+  }
+  // 2. Explicit Desa
+  const desaMatch = clean.match(/(?:Desa)\s*([^,.\n]+)/i);
+  if (desaMatch && desaMatch[1]) {
+    return `Desa ${desaMatch[1].trim()}`;
+  }
+  // 3. Comma-separated parts: find part that is NOT Jl / Jalan / RT / RW / No / number
+  const parts = clean.split(',').map((s) => s.trim()).filter(Boolean);
+  for (const p of parts) {
+    if (
+      !/^(?:jl|jalan|rt|rw|no\b|nomor\b|\d)/i.test(p) &&
+      !/^(?:kec|kecamatan|kab|kabupaten|prov|provinsi)/i.test(p)
+    ) {
+      if (p.toLowerCase().startsWith('kel')) return p;
+      return `Kelurahan ${p}`;
+    }
+  }
+  return `Kelurahan ${defaultCity}`;
+}

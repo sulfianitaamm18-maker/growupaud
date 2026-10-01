@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Sprout,
   Bell,
@@ -13,9 +13,12 @@ import {
   X,
   User,
   Camera,
+  Mail,
 } from 'lucide-react';
 import { UserProfile, UserRole } from '../types';
 import { UserProfileModal } from './common/UserProfileModal';
+import { MessagingModal } from './messaging/MessagingModal';
+import { messagingService } from '../services/messagingService';
 
 interface HeaderProps {
   currentUser: UserProfile;
@@ -81,35 +84,26 @@ export const Header: React.FC<HeaderProps> = ({
     text: 'text-slate-800',
     label: currentUser.role,
   };
-  const [isNotifOpen, setIsNotifOpen] = useState(false);
   const [isProfileModalOpen, setIsProfileModalOpen] = useState(false);
+  const [isMessagingModalOpen, setIsMessagingModalOpen] = useState(false);
+  const [messagingInitialTab, setMessagingInitialTab] = useState<'inbox' | 'compose' | 'notifications'>('inbox');
+  const [unreadCounts, setUnreadCounts] = useState<{ unreadMessages: number; unreadNotifications: number }>({
+    unreadMessages: 0,
+    unreadNotifications: 0,
+  });
 
-  const notifications = [
-    {
-      id: 'notif-1',
-      title: 'Tanggapan Orang Tua (Ananda Fatih Al-Fatih)',
-      message: 'Ibu Aisyah Rahmawati: "Terima kasih Bu Guru atas laporannya. Di rumah Ananda sudah mulai rajin berdoa sebelum makan."',
-      time: '10 menit yang lalu',
-      read: false,
-      type: 'feedback',
-    },
-    {
-      id: 'notif-2',
-      title: 'Status Laporan Dibaca',
-      message: 'Orang Tua Ananda Fatih Al-Fatih telah membaca dan memeriksa Laporan Capaian Perkembangan Semester I.',
-      time: '1 jam yang lalu',
-      read: true,
-      type: 'status',
-    },
-    {
-      id: 'notif-3',
-      title: 'Aktivitas Kelas Bintang',
-      message: '6 anak telah berhasil dicatat observasinya untuk modul Nilai Agama & Moral.',
-      time: 'Hari ini',
-      read: true,
-      type: 'system',
-    },
-  ];
+  useEffect(() => {
+    if (!currentUser.id) return;
+
+    // Realtime unread counts listener directly from Firestore
+    const unsubscribe = messagingService.subscribeUnreadCounts(currentUser.id, (counts) => {
+      setUnreadCounts(counts);
+    });
+
+    return () => {
+      unsubscribe();
+    };
+  }, [currentUser.id]);
 
   return (
     <header className="sticky top-0 z-30 bg-white border-b border-slate-200 shadow-xs">
@@ -172,59 +166,37 @@ export const Header: React.FC<HeaderProps> = ({
               </button>
             )}
 
-            {/* Notification Bell */}
-            <div className="relative">
-              <button
-                onClick={() => setIsNotifOpen(!isNotifOpen)}
-                className="relative p-2 rounded-lg text-slate-600 hover:bg-slate-100 transition-colors"
-                title="Notifikasi & Komunikasi Guru - Orang Tua"
-              >
-                <Bell className="w-5 h-5" />
-                <span className="absolute top-1.5 right-1.5 w-2 h-2 rounded-full bg-emerald-600 ring-2 ring-white"></span>
-              </button>
-
-              {isNotifOpen && (
-                <div className="absolute right-0 mt-2 w-80 sm:w-96 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden z-50">
-                  <div className="flex items-center justify-between px-4 py-3 bg-slate-900 text-white">
-                    <div className="flex items-center gap-2 text-xs font-bold">
-                      <Bell className="w-4 h-4 text-emerald-400" />
-                      <span>Pesan &amp; Notifikasi Perkembangan</span>
-                    </div>
-                    <button
-                      onClick={() => setIsNotifOpen(false)}
-                      className="text-slate-400 hover:text-white"
-                    >
-                      <X className="w-4 h-4" />
-                    </button>
-                  </div>
-                  <div className="max-h-80 overflow-y-auto divide-y divide-slate-100">
-                    {notifications.map((item) => (
-                      <div
-                        key={item.id}
-                        className={`p-3.5 text-left hover:bg-slate-50 transition-colors ${
-                          !item.read ? 'bg-emerald-50/40' : ''
-                        }`}
-                      >
-                        <div className="flex items-start justify-between gap-2">
-                          <p className="text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                            {item.type === 'feedback' && <MessageSquare className="w-3.5 h-3.5 text-indigo-600 shrink-0" />}
-                            {item.type === 'status' && <CheckCircle2 className="w-3.5 h-3.5 text-emerald-600 shrink-0" />}
-                            <span>{item.title}</span>
-                          </p>
-                          <span className="text-[10px] text-slate-400 shrink-0">{item.time}</span>
-                        </div>
-                        <p className="text-xs text-slate-600 mt-1 leading-relaxed">{item.message}</p>
-                      </div>
-                    ))}
-                  </div>
-                  <div className="p-2.5 bg-slate-50 border-t border-slate-200 text-center">
-                    <span className="text-[11px] text-slate-500 font-medium">
-                      ✓ Komunikasi Dua Arah Aktif (Guru ↔ Orang Tua)
-                    </span>
-                  </div>
-                </div>
+            {/* Messages Inbox Button */}
+            <button
+              onClick={() => {
+                setMessagingInitialTab('inbox');
+                setIsMessagingModalOpen(true);
+              }}
+              className="relative p-2 rounded-xl text-slate-600 hover:bg-slate-100 hover:text-emerald-700 transition-colors cursor-pointer"
+              title="Pusat Pesan & Komunikasi Sekolah"
+            >
+              <MessageSquare className="w-5 h-5" />
+              {unreadCounts.unreadMessages > 0 && (
+                <span className="absolute top-1 right-1 px-1.5 py-0.2 rounded-full bg-emerald-600 text-white text-[10px] font-bold ring-2 ring-white">
+                  {unreadCounts.unreadMessages > 9 ? '9+' : unreadCounts.unreadMessages}
+                </span>
               )}
-            </div>
+            </button>
+
+            {/* Notification Bell Button */}
+            <button
+              onClick={() => {
+                setMessagingInitialTab('notifications');
+                setIsMessagingModalOpen(true);
+              }}
+              className="relative p-2 rounded-xl text-slate-600 hover:bg-slate-100 hover:text-emerald-700 transition-colors cursor-pointer"
+              title="Notifikasi Sistem & Perkembangan"
+            >
+              <Bell className="w-5 h-5" />
+              {unreadCounts.unreadNotifications > 0 && (
+                <span className="absolute top-1.5 right-1.5 w-2.5 h-2.5 rounded-full bg-emerald-600 ring-2 ring-white"></span>
+              )}
+            </button>
 
             {/* User Profile + Tombol Log Out */}
             <div className="flex items-center gap-2 pl-2 border-l border-slate-200">
@@ -289,6 +261,19 @@ export const Header: React.FC<HeaderProps> = ({
           isOpen={isProfileModalOpen}
           onClose={() => setIsProfileModalOpen(false)}
           currentUser={currentUser}
+        />
+      )}
+
+      {/* Real School Messaging & Communication Center */}
+      {isMessagingModalOpen && (
+        <MessagingModal
+          isOpen={isMessagingModalOpen}
+          onClose={() => {
+            setIsMessagingModalOpen(false);
+            messagingService.getUnreadCounts().then(setUnreadCounts).catch(() => {});
+          }}
+          currentUser={currentUser}
+          initialTab={messagingInitialTab}
         />
       )}
     </header>

@@ -9,6 +9,12 @@ import {
   DevelopmentInterpretation,
   RatingLevel,
   PedagogicalRecommendation,
+  DevelopmentIndicatorGenerationRequest,
+  DevelopmentIndicatorEngineResponse,
+  GeneratedIndicatorResult,
+  LearningObjectiveItem,
+  CPItem,
+  TPItem,
 } from '../types';
 import {
   calculateAspectScores,
@@ -20,19 +26,29 @@ import { buildPedagogicalRecommendation } from './pedagogicalRecommendationEngin
 import { getCuratedActivitiesForTheme, ThematicCuratedActivity } from './thematicActivityCurator';
 import { auth } from '../lib/firebase';
 
-async function getAuthHeader(): Promise<Record<string, string>> {
-  if (auth.currentUser) {
+export async function getAuthHeader(): Promise<Record<string, string> | null> {
+  if (!auth.currentUser && typeof (auth as any).authStateReady === 'function') {
     try {
-      const token = await auth.currentUser.getIdToken();
-      return {
-        'Authorization': `Bearer ${token}`,
-        'Content-Type': 'application/json',
-      };
+      await (auth as any).authStateReady();
     } catch {
       // ignore
     }
   }
-  return { 'Content-Type': 'application/json' };
+
+  if (auth.currentUser) {
+    try {
+      const token = await auth.currentUser.getIdToken();
+      if (token) {
+        return {
+          'Authorization': `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        };
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return null;
 }
 
 interface AnalyzeObservationParams {
@@ -111,53 +127,55 @@ export async function generateAIAssessmentInsight(
   try {
     // 1. All AI requests must route through authenticated server-side endpoint with Firebase ID token
     const authHeaders = await getAuthHeader();
-    const serverRes = await fetch('/api/ai/analyze-observation', {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify({
-        studentId,
-        studentName,
-        studentAge: ageContext.isAgeFilled ? ageContext.ageDisplay : studentAge,
-        activityTitle,
-        cp,
-        tp,
-        indicators,
-        teacherNote,
-        voiceNoteText,
-        evidences,
-      }),
-    });
+    if (authHeaders) {
+      const serverRes = await fetch('/api/ai/analyze-observation', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify({
+          studentId,
+          studentName,
+          studentAge: ageContext.isAgeFilled ? ageContext.ageDisplay : studentAge,
+          activityTitle,
+          cp,
+          tp,
+          indicators,
+          teacherNote,
+          voiceNoteText,
+          evidences,
+        }),
+      });
 
-    if (serverRes.ok) {
-      const json = await serverRes.json();
-      if (json.success && json.data) {
-        const d = json.data;
-        return {
-          overview: d.overview || `Analisis asesmen perkembangan Ananda ${studentName}`,
-          aspectScores: realAspectScores,
-          strengths: Array.isArray(d.strengths) && d.strengths.length > 0 ? d.strengths : ['Belum ada capaian terukur yang menonjol pada kegiatan ini.'],
-          needsStimulation: Array.isArray(d.needsStimulation) && d.needsStimulation.length > 0 ? d.needsStimulation : ['Stimulasi lanjutan akan disesuaikan dengan kebutuhan bermain ananda.'],
-          generatedNarrative: d.generatedNarrative || '',
-          homeStimulationAdvice: Array.isArray(d.homeStimulationAdvice) && d.homeStimulationAdvice.length > 0 ? d.homeStimulationAdvice : ['Dampingi ananda dalam bermain harian di rumah dengan penuh perhatian.'],
-          confidenceScore: confidenceInfo.score,
-          confidenceLevel: confidenceInfo.level,
-          confidenceFactors: confidenceInfo.factors,
-          triangulationMatrix: d.triangulationMatrix || [],
-          inconsistencies: d.inconsistencies || [],
-          interpretations: d.interpretations || [],
-          dataSourcesAnalyzed: {
-            rubricCount: ratedIndicators.length,
-            hasTeacherNote: Boolean(teacherNote),
-            hasVoiceNote: Boolean(voiceNoteText),
-            evidenceCount: evidences.length,
-            hasHistory: previousObservations.length > 0,
-          },
-          lastUpdated: new Date().toLocaleDateString('id-ID', {
-            day: 'numeric',
-            month: 'long',
-            year: 'numeric',
-          }),
-        };
+      if (serverRes.ok) {
+        const json = await serverRes.json();
+        if (json.success && json.data) {
+          const d = json.data;
+          return {
+            overview: d.overview || `Analisis asesmen perkembangan Ananda ${studentName}`,
+            aspectScores: realAspectScores,
+            strengths: Array.isArray(d.strengths) && d.strengths.length > 0 ? d.strengths : ['Belum ada capaian terukur yang menonjol pada kegiatan ini.'],
+            needsStimulation: Array.isArray(d.needsStimulation) && d.needsStimulation.length > 0 ? d.needsStimulation : ['Stimulasi lanjutan akan disesuaikan dengan kebutuhan bermain ananda.'],
+            generatedNarrative: d.generatedNarrative || '',
+            homeStimulationAdvice: Array.isArray(d.homeStimulationAdvice) && d.homeStimulationAdvice.length > 0 ? d.homeStimulationAdvice : ['Dampingi ananda dalam bermain harian di rumah dengan penuh perhatian.'],
+            confidenceScore: confidenceInfo.score,
+            confidenceLevel: confidenceInfo.level,
+            confidenceFactors: confidenceInfo.factors,
+            triangulationMatrix: d.triangulationMatrix || [],
+            inconsistencies: d.inconsistencies || [],
+            interpretations: d.interpretations || [],
+            dataSourcesAnalyzed: {
+              rubricCount: ratedIndicators.length,
+              hasTeacherNote: Boolean(teacherNote),
+              hasVoiceNote: Boolean(voiceNoteText),
+              evidenceCount: evidences.length,
+              hasHistory: previousObservations.length > 0,
+            },
+            lastUpdated: new Date().toLocaleDateString('id-ID', {
+              day: 'numeric',
+              month: 'long',
+              year: 'numeric',
+            }),
+          };
+        }
       }
     }
   } catch (serverErr) {
@@ -567,22 +585,67 @@ function buildDeterministicTriangulation({
   };
 }
 
+export interface ActivityIdeaItem {
+  activityId?: string;
+  title: string;
+  duration: string;
+  description: string;
+  steps: string[];
+  linkedCPIds?: string[];
+  linkedTPIds?: string[];
+  linkedObjectiveIds?: string[];
+  materials?: string[] | string;
+  provocationQuestions?: string[];
+  assessmentIndicators?: Array<{
+    aspect: DevelopmentalAspect | string;
+    text: string;
+    linkedTPId?: string;
+    rubric?: {
+      BB: string;
+      MB: string;
+      BSH: string;
+      BSB: string;
+    };
+  }>;
+  tarlAdjustments?: {
+    beginner: string;
+    intermediate: string;
+    advanced: string;
+  };
+}
+
 export interface LessonPlanRecommendationResult {
   theme: string;
   subtheme: string;
-  recommendedCP: {
+  selectedCPIds?: string[];
+  selectedCPs?: Array<{
+    id: string;
+    code: string;
+    title: string;
+    description?: string;
+  }>;
+  selectedTpIds?: string[];
+  selectedTPs?: Array<{
+    id: string;
+    cpId?: string;
+    code: string;
+    title: string;
+    description?: string;
+  }>;
+  learningObjectives?: LearningObjectiveItem[];
+  recommendedCP?: {
     code: string;
     title: string;
     description: string;
   };
-  recommendedATP: {
+  recommendedATP?: {
     code: string;
     title: string;
     phase: string;
     stepOrder: number;
     description: string;
   };
-  recommendedTP: {
+  recommendedTP?: {
     code: string;
     title: string;
     description: string;
@@ -590,6 +653,7 @@ export interface LessonPlanRecommendationResult {
   recommendedIndicators: Array<{
     aspect: DevelopmentalAspect;
     text: string;
+    linkedTPId?: string;
     rubric: {
       BB: string;
       MB: string;
@@ -597,12 +661,7 @@ export interface LessonPlanRecommendationResult {
       BSB: string;
     };
   }>;
-  activityIdeas: Array<{
-    title: string;
-    duration: string;
-    description: string;
-    steps: string[];
-  }>;
+  activityIdeas: ActivityIdeaItem[];
   mediaAndMaterials: string[];
   provocationQuestions: string[];
   tarlAdjustments: {
@@ -613,11 +672,17 @@ export interface LessonPlanRecommendationResult {
   pedagogicalNotes?: string;
   chainedRecommendation?: PedagogicalRecommendation;
   curatedActivityOptions?: ThematicCuratedActivity[];
+  staticCuratedPresets?: ThematicCuratedActivity[];
+  source?: 'gemini' | 'ai' | 'engine_fallback' | 'thematic_curator';
 }
 
 export async function fetchLessonPlanRecommendation(params: {
   theme: string;
   subtheme: string;
+  selectedCPs?: CPItem[] | any[];
+  selectedCPIds?: string[];
+  selectedTPs?: TPItem[] | any[];
+  selectedTpIds?: string[];
   ageGroup?: string;
   schoolContext?: any;
   customPrompt?: string;
@@ -626,7 +691,13 @@ export async function fetchLessonPlanRecommendation(params: {
   childObservations?: ObservationRecord[];
 }): Promise<LessonPlanRecommendationResult> {
   const isKelompokA = (params.ageGroup || '').includes('4-5') || (params.ageGroup || '').toLowerCase().includes('kelompok a');
-  const curatedActivities = getCuratedActivitiesForTheme(params.theme, params.subtheme, isKelompokA);
+  const curatedActivities = getCuratedActivitiesForTheme(
+    params.theme,
+    params.subtheme,
+    isKelompokA,
+    params.selectedCPIds,
+    params.selectedTpIds
+  );
 
   // 1. Build foundational unified pedagogical chain locally
   const chained = buildPedagogicalRecommendation({
@@ -641,45 +712,107 @@ export async function fetchLessonPlanRecommendation(params: {
 
   try {
     const authHeaders = await getAuthHeader();
-    const res = await fetch('/api/ai/lesson-plan-recommendation', {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.data) {
-        return {
-          ...json.data,
-          chainedRecommendation: chained,
-          curatedActivityOptions: curatedActivities,
-        };
+    if (authHeaders) {
+      const res = await fetch('/api/ai/lesson-plan-recommendation', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(params),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          const hasDynamicAiActivities = Array.isArray(json.data.activityIdeas) && json.data.activityIdeas.length > 0;
+          return {
+            ...json.data,
+            source: json.source || (json.data.source || 'gemini'),
+            chainedRecommendation: chained,
+            // Keep curatedActivityOptions empty if AI produced dynamic activityIdeas,
+            // so frontend prioritizes the contextual AI recommendations over static templates!
+            curatedActivityOptions: hasDynamicAiActivities ? undefined : curatedActivities,
+            staticCuratedPresets: curatedActivities,
+          };
+        }
       }
     }
   } catch (err) {
     console.warn('[AI Service] Lesson plan recommendation request error, using engine fallback:', err);
   }
 
-  // Pure Pedagogical Engine Result (Theme & Age Aligned, Zero Dummy Data)
+  // Pure Pedagogical Engine Result with Strict Traceability (Theme & Age Aligned, Zero Dummy Data)
+  const fallbackCpIds = params.selectedCPIds && params.selectedCPIds.length > 0
+    ? params.selectedCPIds
+    : ['cp-03'];
+
+  const fallbackTpIds = params.selectedTpIds && params.selectedTpIds.length > 0
+    ? params.selectedTpIds
+    : [chained.context.tp.code || 'tp-lit-01'];
+
+  // Construct linked operational learning objectives
+  const objectives: LearningObjectiveItem[] = fallbackTpIds.map((tId, idx) => ({
+    objectiveId: `obj-fallback-${idx + 1}`,
+    objectiveText: `Anak mampu menyelidiki dan mengekspresikan pemahaman tentang ${params.subtheme} sesuai capaian target.`,
+    linkedCPIds: [fallbackCpIds[idx % fallbackCpIds.length]],
+    linkedTPIds: [tId],
+  }));
+
   const activityList = curatedActivities.length > 0
-    ? curatedActivities.map((act) => ({
-        title: act.title,
-        duration: act.duration,
-        description: act.description,
-        steps: act.steps,
-      }))
+    ? curatedActivities.map((act, i) => {
+        const actCp = [fallbackCpIds[i % fallbackCpIds.length]];
+        const actTp = [fallbackTpIds[i % fallbackTpIds.length]];
+        return {
+          activityId: act.id,
+          title: act.title,
+          duration: act.duration,
+          description: act.description,
+          steps: act.steps,
+          materials: [...act.primaryMaterials, ...act.localLooseParts],
+          provocationQuestions: act.provocationQuestions,
+          linkedCPIds: act.linkedCPIds && act.linkedCPIds.length > 0 ? act.linkedCPIds : actCp,
+          linkedTPIds: act.linkedTPIds && act.linkedTPIds.length > 0 ? act.linkedTPIds : actTp,
+          linkedObjectiveIds: [objectives[i % objectives.length]?.objectiveId || `obj-fallback-${i + 1}`],
+          assessmentIndicators: act.observableIndicators.map((ind) => ({
+            aspect: ind.aspect,
+            text: ind.observableBehavior,
+            linkedTPId: actTp[0],
+            rubric: ind.rubric,
+          })),
+          tarlAdjustments: {
+            beginner: act.tarlAdjustments.perluDukungan,
+            intermediate: act.tarlAdjustments.berkembang,
+            advanced: act.tarlAdjustments.pengayaan,
+          },
+        };
+      })
     : [
         {
+          activityId: 'act-fallback-01',
           title: chained.activityRecommendation.title,
           duration: chained.activityRecommendation.duration,
           description: chained.activityRecommendation.description,
           steps: chained.activityRecommendation.steps,
+          materials: [...chained.materials.primary, ...chained.materials.localLooseParts],
+          provocationQuestions: [
+            ...chained.promptingQuestions.introductory,
+            ...chained.promptingQuestions.exploratory,
+          ],
+          linkedCPIds: fallbackCpIds,
+          linkedTPIds: fallbackTpIds,
+          linkedObjectiveIds: objectives.map((o) => o.objectiveId),
+          assessmentIndicators: chained.assessmentIndicators.map((ind) => ({
+            aspect: ind.aspect,
+            text: ind.observableBehavior,
+            linkedTPId: fallbackTpIds[0],
+            rubric: ind.rubric,
+          })),
         },
       ];
 
   return {
     theme: params.theme,
     subtheme: params.subtheme,
+    selectedCPIds: fallbackCpIds,
+    selectedTpIds: fallbackTpIds,
+    learningObjectives: objectives,
     recommendedCP: chained.context.cp,
     recommendedATP: {
       code: chained.context.atp.code,
@@ -732,15 +865,17 @@ export async function analyzeActivityPhoto(params: {
 }): Promise<PhotoAnalysisResult> {
   try {
     const authHeaders = await getAuthHeader();
-    const res = await fetch('/api/ai/analyze-photo', {
-      method: 'POST',
-      headers: authHeaders,
-      body: JSON.stringify(params),
-    });
-    if (res.ok) {
-      const json = await res.json();
-      if (json.success && json.data) {
-        return json.data;
+    if (authHeaders) {
+      const res = await fetch('/api/ai/analyze-photo', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(params),
+      });
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data) {
+          return json.data;
+        }
       }
     }
   } catch (err) {
@@ -758,3 +893,205 @@ export async function analyzeActivityPhoto(params: {
     pedagogicInsight: 'Dokumentasi foto tidak boleh menjadi satu-satunya dasar penilaian. Validasi dengan pengamatan autentik guru.'
   };
 }
+
+/**
+ * ENGINE INDIKATOR PERKEMBANGAN (6 ASPEK GROWUPAUD)
+ * Menganalisis Tujuan Pembelajaran, Kegiatan, Kelompok Usia, dan Konteks
+ * Menghasilkan aspek relevan + indikator teramati + identifikasi aspek non-fokus
+ */
+export async function generateDevelopmentIndicators(
+  req: DevelopmentIndicatorGenerationRequest
+): Promise<DevelopmentIndicatorEngineResponse> {
+  try {
+    const authHeaders = await getAuthHeader();
+    if (authHeaders) {
+      const res = await fetch('/api/ai/generate-development-indicators', {
+        method: 'POST',
+        headers: authHeaders,
+        body: JSON.stringify(req),
+      });
+
+      if (res.ok) {
+        const json = await res.json();
+        if (json.success && json.data && Array.isArray(json.data.indicators)) {
+          return json.data;
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[AI Service] generateDevelopmentIndicators server error, using local engine:', err);
+  }
+
+  // Fallback Engine Pedagogis Lokal
+  return generateLocalDevelopmentIndicators(req);
+}
+
+export function generateLocalDevelopmentIndicators(
+  req: DevelopmentIndicatorGenerationRequest
+): DevelopmentIndicatorEngineResponse {
+  const {
+    learningObjective = '',
+    activity = '',
+    ageGroup = 'Usia 5-6 Tahun (Kelompok B)',
+    activityContext = '',
+  } = req;
+
+  const aspectsMeta: Record<
+    DevelopmentalAspect,
+    { label: string; keywords: RegExp; nonFocusReason: string }
+  > = {
+    NAM: {
+      label: 'Nilai Agama & Moral',
+      keywords: /doa|tuhan|agama|ibadah|ciptaan|syukur|moral|akhlak|adab|sopan|santun|kebaikan|sedekah|alam ciptaan/i,
+      nonFocusReason: 'Kegiatan berfokus pada eksplorasi fisik/kognitif dan tidak memuat penanaman nilai spiritual secara langsung.',
+    },
+    JATI_DIRI: {
+      label: 'Jati Diri (Sosial Emosional)',
+      keywords: /teman|sosial|emosi|perasaan|bergantian|antre|antri|giliran|kerja sama|kerjasama|mandiri|percaya diri|regulasi|empati|berbagi|merapikan/i,
+      nonFocusReason: 'Interaksi sosial dan regulasi emosi tidak menjadi fokus target utama dalam sesi bermain ini.',
+    },
+    LITERASI_STEAM: {
+      label: 'Literasi & STEAM',
+      keywords: /cerita|buku|huruf|kata|membaca|dongeng|menyimak|sains|eksperimen|teknologi|seni|lukis|gambar|pola|steam|loose parts|meneliti/i,
+      nonFocusReason: 'Kegiatan tidak menekankan keaksaraan simbolik, teknologi, atau rekayasa bahan.',
+    },
+    MOTORIK_KASAR: {
+      label: 'Motorik Kasar',
+      keywords: /lari|lompat|loncat|lempar|tangkap|panjat|titi|senam|gerak|tari|tendang|rangkak|keseimbangan|jinjit|estafet|tubuh|olahraga/i,
+      nonFocusReason: 'Aktivitas dilakukan pada area duduk/meja dengan ruang gerak lokomotor terbatas.',
+    },
+    MOTORIK_HALUS: {
+      label: 'Motorik Halus',
+      keywords: /gunting|potong|robek|remas|tempel|ronce|jemari|jari|tangan|pensil|kuas|balok|susun|pilin|plastisin|lempung|menjepit|meronce/i,
+      nonFocusReason: 'Manipulasi benda kecil atau koordinasi jemari tidak menjadi titik berat kegiatan.',
+    },
+    KOGNITIF: {
+      label: 'Kognitif & Berpikir',
+      keywords: /hitung|angka|kelompok|ukur|bentuk|warna|urut|klasifikasi|cocok|masalah|sebab|mengapa|bagaimana|beda|sama|bandingkan/i,
+      nonFocusReason: 'Penekanan lebih diarahkan pada ekspresi motorik dan sensomotorik bebas.',
+    },
+  };
+
+  const combinedText = `${learningObjective} ${activity} ${activityContext}`;
+  const relevantAspectKeys: DevelopmentalAspect[] = [];
+  const nonFocusAspects: Array<{
+    aspect: DevelopmentalAspect;
+    aspectLabel: string;
+    reason: string;
+  }> = [];
+
+  const allAspectsList = Object.keys(aspectsMeta) as DevelopmentalAspect[];
+
+  for (const key of allAspectsList) {
+    if (aspectsMeta[key].keywords.test(combinedText)) {
+      relevantAspectKeys.push(key);
+    }
+  }
+
+  // Jika tidak ada kata kunci yang cocok, tetapkan 2 aspek yang paling natural
+  if (relevantAspectKeys.length === 0) {
+    relevantAspectKeys.push('KOGNITIF', 'MOTORIK_HALUS');
+  } else if (relevantAspectKeys.length > 4) {
+    // Batasi maksimal 3-4 aspek relevan agar tidak memaksakan semua 6 aspek
+    relevantAspectKeys.length = 3;
+  }
+
+  for (const key of allAspectsList) {
+    if (!relevantAspectKeys.includes(key)) {
+      nonFocusAspects.push({
+        aspect: key,
+        aspectLabel: aspectsMeta[key].label,
+        reason: `Tidak menjadi fokus utama kegiatan: ${aspectsMeta[key].nonFocusReason}`,
+      });
+    }
+  }
+
+  const generatedIndicators: GeneratedIndicatorResult[] = relevantAspectKeys.map((aspectKey) => {
+    const meta = aspectsMeta[aspectKey];
+    let text = '';
+    let observableBehavior = '';
+    let rubric = {
+      BB: 'Belum menunjukkan kemampuan yang diharapkan meskipun telah diberi contoh dan dorongan hangat.',
+      MB: 'Mulai menunjukkan upaya berkegiatan dengan bimbingan dan pendampingan bertahap dari guru.',
+      BSH: 'Mampu menunjukkan kemampuan secara mandiri, stabil, dan konsisten sesuai tahap usianya.',
+      BSB: 'Menunjukkan kemampuan dengan sangat percaya diri, mandiri, serta mampu berkreasi/mengajak teman.',
+    };
+
+    if (aspectKey === 'KOGNITIF') {
+      text = `Anak mampu menganalisis atau membedakan unsur/karakteristik dalam kegiatan "${activity || 'bermain'}" secara terarah.`;
+      observableBehavior = 'Anak mengamati, mengelompokkan, atau membandingkan unsur kegiatan dengan pemahaman yang tepat.';
+      rubric = {
+        BB: 'Belum dapat mengenali atau membedakan unsur kegiatan tanpa bantuan penuh guru.',
+        MB: 'Mulai mengenali unsur kegiatan ketika diberi bimbingan atau pertanyaan pemantik guru.',
+        BSH: 'Mampu membedakan dan mengelompokkan unsur kegiatan secara mandiri dan tepat.',
+        BSB: 'Mampu membedakan unsur secara mandiri serta menjelaskan alasan pemikirannya secara lugas.',
+      };
+    } else if (aspectKey === 'MOTORIK_HALUS') {
+      text = `Anak mampu menggunakan koordinasi jari-jemari tangan secara terkontrol saat melakukan "${activity || 'kegiatan'}"`;
+      observableBehavior = 'Anak memegang, menata, atau memanipulasi bahan main dengan stabil menggunakan koordinasi jemarinya.';
+      rubric = {
+        BB: 'Belum terbiasa mengkoordinasikan jemari secara stabil saat memegang media bahan main.',
+        MB: 'Mulai mampu memegang dan menggerakkan bahan main dengan dorongan dan bantuan guru.',
+        BSH: 'Mandiri dan terkoordinasi dengan baik saat memanipulasi bahan bermain.',
+        BSB: 'Sangat terampil dan teliti menggunakan koordinasi jemari serta menghasilkan karya yang rapi.',
+      };
+    } else if (aspectKey === 'MOTORIK_KASAR') {
+      text = `Anak mampu melakukan koordinasi gerak tubuh dan menjaga keseimbangan selama "${activity || 'kegiatan'}"`;
+      observableBehavior = 'Anak menggerakkan anggota tubuh dengan seimbang, lincah, dan aman mengikuti alur kegiatan.';
+      rubric = {
+        BB: 'Tampak ragu atau kurang seimbang saat melakukan gerakan motorik kasar yang diarahkan.',
+        MB: 'Mulai mau mencoba gerakan fisik dengan bimbingan dan pendampingan guru.',
+        BSH: 'Mampu melakukan gerakan fisik secara mandiri, teratur, dan menjaga keseimbangan tubuh.',
+        BSB: 'Sangat lincah, terampil menjaga keseimbangan, dan antusias memimpin atau membantu teman.',
+      };
+    } else if (aspectKey === 'JATI_DIRI') {
+      text = `Anak menunjukkan kemandirian, regulasi emosi, dan sikap kooperatif saat mengikuti "${activity || 'kegiatan'}"`;
+      observableBehavior = 'Anak mau bergantian, berbagi alat/bahan bermain, dan mengekspresikan perasaannya secara positif.';
+      rubric = {
+        BB: 'Masih membutuhkan pendampingan intensif dalam mengelola emosi atau berbagi media main.',
+        MB: 'Mulai mau berbagi atau menunggu giliran setelah diingatkan secara lembut oleh guru.',
+        BSH: 'Secara mandiri mampu bekerja sama, bersabar menunggu giliran, dan menjaga suasana kondusif.',
+        BSB: 'Menunjukkan empati yang tinggi, dengan senang hati membantu teman dan menjadi teladan kerja sama.',
+      };
+    } else if (aspectKey === 'NAM') {
+      text = `Anak menunjukkan rasa syukur, merawat bahan alam/lingkungan sekitar, dan bersikap santun saat "${activity || 'kegiatan'}"`;
+      observableBehavior = 'Anak mengucapkan rasa terima kasih, menjaga media main ciptaan Tuhan, dan bersikap ramah.';
+      rubric = {
+        BB: 'Belum terbiasa menunjukkan perilaku merawat bahan atau mengucap syukur secara mandiri.',
+        MB: 'Mulai menunjukkan sikap bersyukur dan merawat alat setelah diingatkan guru.',
+        BSH: 'Mampu merawat media main dan bersikap sopan santun secara konsisten dan mandiri.',
+        BSB: 'Menunjukkan kesadaran spiritual dan moral yang tinggi serta mengajak teman berbuat baik.',
+      };
+    } else if (aspectKey === 'LITERASI_STEAM') {
+      text = `Anak mampu mengekspresikan ide, menggunakan kosakata kontekstual, atau bereksplorasi dengan bahan dalam "${activity || 'kegiatan'}"`;
+      observableBehavior = 'Anak menceritakan apa yang dibuatnya atau menunjukkan rasa ingin tahu terhadap fenomena/bahan main.';
+      rubric = {
+        BB: 'Belum mau menceritakan atau mengeksplorasi bahan selain yang ditentukan guru.',
+        MB: 'Mulai mau bertanya atau menyebutkan bagian dari hasil karyanya dengan panduan guru.',
+        BSH: 'Mampu menceritakan ide karyanya dengan kalimat sederhana serta mengeksplorasi media dengan baik.',
+        BSB: 'Sangat kreatif mengeksplorasi media, menghubungkan dengan pengalaman nyata, dan bercerita komunikatif.',
+      };
+    }
+
+    return {
+      aspect: aspectKey,
+      aspectLabel: meta.label,
+      text,
+      observableBehavior,
+      isRelevant: true,
+      rubric,
+    };
+  });
+
+  return {
+    learningObjective,
+    activity,
+    ageGroup,
+    activityContext,
+    relevantAspects: relevantAspectKeys,
+    indicators: generatedIndicators,
+    nonFocusAspects,
+    pedagogicalAdvice: `Amati keterlibatan anak selama "${activity}". Catat bukti autentik berupa perilaku yang tampak, dan gunakan rubrik sebagai panduan refleksi objektif.`,
+  };
+}
+

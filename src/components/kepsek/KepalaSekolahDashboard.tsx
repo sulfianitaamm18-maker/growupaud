@@ -19,6 +19,7 @@ import { RadarChartCard } from '../common/RadarChartCard';
 import { AspectScoreBars } from '../common/AspectScoreBars';
 import { schoolStore } from '../../services/schoolStore';
 import { isObservationToday } from '../../utils/dateUtils';
+import { StudentLifecycleHistoryModal } from '../student/StudentLifecycleHistoryModal';
 
 interface KepalaSekolahDashboardProps {
   students: StudentProfile[];
@@ -32,6 +33,7 @@ export const KepalaSekolahDashboard: React.FC<KepalaSekolahDashboardProps> = ({
   onOpenReportPreview,
 }) => {
   const [selectedClass, setSelectedClass] = useState<string>('SEMUA');
+  const [historyStudent, setHistoryStudent] = useState<StudentProfile | null>(null);
 
   // Real School Profile from schoolStore
   const schoolProfile = useMemo(() => schoolStore.getSchoolProfile(), []);
@@ -468,8 +470,16 @@ export const KepalaSekolahDashboard: React.FC<KepalaSekolahDashboardProps> = ({
                       </span>
 
                       <button
+                        onClick={() => setHistoryStudent(std)}
+                        className="px-3 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold transition-colors cursor-pointer"
+                        title="Lihat Riwayat Perkembangan & Tahun Ajaran"
+                      >
+                        Riwayat
+                      </button>
+
+                      <button
                         onClick={() => onOpenReportPreview(std)}
-                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors"
+                        className="px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold transition-colors cursor-pointer"
                       >
                         Lihat Rapor
                       </button>
@@ -481,6 +491,13 @@ export const KepalaSekolahDashboard: React.FC<KepalaSekolahDashboardProps> = ({
           </div>
         </div>
       </div>
+
+      {historyStudent && (
+        <StudentLifecycleHistoryModal
+          student={historyStudent}
+          onClose={() => setHistoryStudent(null)}
+        />
+      )}
     </div>
   );
 };

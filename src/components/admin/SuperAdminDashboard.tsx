@@ -32,6 +32,8 @@ import {
   HeartHandshake,
   Trash2,
   Compass,
+  Archive,
+  ArrowUpRight,
 } from 'lucide-react';
 import {
   SchoolProfile,
@@ -65,15 +67,21 @@ import {
 } from '../../utils/ageUtils';
 
 import { AdminCurriculumView } from './AdminCurriculumView';
-import { AdminScheduleView } from './AdminScheduleView';
+import { AcademicYearManagementView } from './AcademicYearManagementView';
+import { StudentLifecycleManagementView } from './StudentLifecycleManagementView';
+import { StudentArchiveView } from './StudentArchiveView';
+import { AuditLogView } from './AuditLogView';
 
 type AdminTab =
   | 'BERANDA'
   | 'SEKOLAH'
+  | 'TAHUN_AJARAN'
+  | 'SIKLUS_SISWA'
+  | 'ARSIP'
   | 'PENGGUNA'
   | 'ANAK'
   | 'KURIKULUM'
-  | 'JADWAL'
+  | 'AUDIT_LOG'
   | 'PENGATURAN';
 
 type AnakSubTab = 'SISWA' | 'KELAS';
@@ -130,6 +138,7 @@ export const SuperAdminDashboard: React.FC = () => {
   // Active Menu Tabs
   const [activeTab, setActiveTab] = useState<AdminTab>('BERANDA');
   const [anakSubTab, setAnakSubTab] = useState<AnakSubTab>('SISWA');
+  const [penggunaSubTab, setPenggunaSubTab] = useState<'ALL_USERS' | 'PARENT_SYNC'>('ALL_USERS');
 
   // Search & Filters
   const [searchQuery, setSearchQuery] = useState('');
@@ -148,8 +157,11 @@ export const SuperAdminDashboard: React.FC = () => {
     setIsLoading(true);
     setFetchError(null);
     try {
-      await schoolStore.refreshFromFirestore();
-      const userList = await userStore.getAllUserProfiles();
+      const schoolId = userProfile?.schoolId || 'main-school';
+      if (!schoolStore.getIsInitialized()) {
+        await schoolStore.refreshFromFirestore(schoolId, userProfile?.role);
+      }
+      const userList = await userStore.getAllUserProfiles(schoolId);
       setAllUsers(userList);
       setSchoolProfile(schoolStore.getSchoolProfile());
       setClasses(schoolStore.getClasses());
@@ -194,6 +206,7 @@ export const SuperAdminDashboard: React.FC = () => {
   // ----------------------------------------------------
   // Modal Tambah / Edit Anak
   const [isStudentModalOpen, setIsStudentModalOpen] = useState(false);
+  const [isSavingStudent, setIsSavingStudent] = useState(false);
   const [editingStudent, setEditingStudent] = useState<StudentProfile | null>(
     null
   );
@@ -307,6 +320,7 @@ export const SuperAdminDashboard: React.FC = () => {
 
   const handleSaveStudent = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSavingStudent) return;
     if (!studentForm.name.trim()) return;
 
     // Validate age inputs
@@ -318,6 +332,7 @@ export const SuperAdminDashboard: React.FC = () => {
 
     const formattedAgeLabel = `${studentForm.ageYears} tahun ${studentForm.ageMonths} bulan`;
 
+    setIsSavingStudent(true);
     try {
       if (editingStudent) {
         const updated: StudentProfile = {
@@ -371,6 +386,8 @@ export const SuperAdminDashboard: React.FC = () => {
       setIsStudentModalOpen(false);
     } catch (err: any) {
       showToast(err.message || 'Gagal menyimpan data anak.');
+    } finally {
+      setIsSavingStudent(false);
     }
   };
 
@@ -617,15 +634,69 @@ export const SuperAdminDashboard: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveTab('PENGGUNA')}
+          onClick={() => setActiveTab('TAHUN_AJARAN')}
           className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
-            activeTab === 'PENGGUNA'
+            activeTab === 'TAHUN_AJARAN'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Calendar className="w-4 h-4 text-emerald-500" />
+          <span>Tahun Ajaran</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('SIKLUS_SISWA')}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'SIKLUS_SISWA'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <ArrowUpRight className="w-4 h-4 text-emerald-500" />
+          <span>Kenaikan &amp; Siklus Siswa</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('ARSIP')}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'ARSIP'
+              ? 'bg-slate-900 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <Archive className="w-4 h-4 text-purple-500" />
+          <span>Arsip Siswa</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('PENGGUNA');
+            setPenggunaSubTab('ALL_USERS');
+          }}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'PENGGUNA' && penggunaSubTab === 'ALL_USERS'
               ? 'bg-slate-900 text-white shadow-xs'
               : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
           <GraduationCap className="w-4 h-4 text-indigo-500" />
           <span>Data Pengguna</span>
+        </button>
+
+        <button
+          onClick={() => {
+            setActiveTab('PENGGUNA');
+            setPenggunaSubTab('PARENT_SYNC');
+          }}
+          className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
+            activeTab === 'PENGGUNA' && penggunaSubTab === 'PARENT_SYNC'
+              ? 'bg-indigo-600 text-white shadow-xs'
+              : 'text-slate-600 hover:bg-slate-100'
+          }`}
+        >
+          <HeartHandshake className="w-4 h-4 text-indigo-500" />
+          <span>Sinkronisasi Orang Tua</span>
         </button>
 
         <button
@@ -653,15 +724,15 @@ export const SuperAdminDashboard: React.FC = () => {
         </button>
 
         <button
-          onClick={() => setActiveTab('JADWAL')}
+          onClick={() => setActiveTab('AUDIT_LOG')}
           className={`px-4 py-2.5 rounded-xl text-xs font-bold flex items-center gap-2 whitespace-nowrap transition-all cursor-pointer ${
-            activeTab === 'JADWAL'
+            activeTab === 'AUDIT_LOG'
               ? 'bg-slate-900 text-white shadow-xs'
               : 'text-slate-600 hover:bg-slate-100'
           }`}
         >
-          <Calendar className="w-4 h-4 text-blue-500" />
-          <span>Jadwal Kegiatan</span>
+          <Activity className="w-4 h-4 text-emerald-500" />
+          <span>Log Audit</span>
         </button>
 
         <button
@@ -1237,7 +1308,7 @@ export const SuperAdminDashboard: React.FC = () => {
               </div>
             }
           >
-            <UserManagementView />
+            <UserManagementView initialSubTab={penggunaSubTab} />
           </Suspense>
         </div>
       )}
@@ -1487,11 +1558,6 @@ export const SuperAdminDashboard: React.FC = () => {
       {activeTab === 'KURIKULUM' && <AdminCurriculumView />}
 
       {/* ==================================================== */}
-      {/* TAB: JADWAL KEGIATAN                                 */}
-      {/* ==================================================== */}
-      {activeTab === 'JADWAL' && <AdminScheduleView />}
-
-      {/* ==================================================== */}
       {/* TAB 5: PENGATURAN                                    */}
       {/* ==================================================== */}
       {activeTab === 'PENGATURAN' && (
@@ -1589,6 +1655,34 @@ export const SuperAdminDashboard: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+
+      {/* ==================================================== */}
+      {/* TAB: TAHUN AJARAN                                   */}
+      {/* ==================================================== */}
+      {activeTab === 'TAHUN_AJARAN' && (
+        <AcademicYearManagementView schoolId={schoolProfile.id || 'main-school'} />
+      )}
+
+      {/* ==================================================== */}
+      {/* TAB: SIKLUS SISWA                                   */}
+      {/* ==================================================== */}
+      {activeTab === 'SIKLUS_SISWA' && (
+        <StudentLifecycleManagementView schoolId={schoolProfile.id || 'main-school'} />
+      )}
+
+      {/* ==================================================== */}
+      {/* TAB: ARSIP SISWA                                    */}
+      {/* ==================================================== */}
+      {activeTab === 'ARSIP' && (
+        <StudentArchiveView schoolId={schoolProfile.id || 'main-school'} />
+      )}
+
+      {/* ==================================================== */}
+      {/* TAB: AUDIT LOG                                      */}
+      {/* ==================================================== */}
+      {activeTab === 'AUDIT_LOG' && (
+        <AuditLogView schoolId={schoolProfile.id || 'main-school'} />
       )}
 
       {/* ==================================================== */}
@@ -1760,9 +1854,10 @@ export const SuperAdminDashboard: React.FC = () => {
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl shadow-xs"
+                  disabled={isSavingStudent}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white font-bold rounded-xl shadow-xs transition-opacity cursor-pointer disabled:cursor-not-allowed"
                 >
-                  Simpan Data
+                  {isSavingStudent ? 'Menyimpan...' : 'Simpan Data'}
                 </button>
               </div>
             </form>

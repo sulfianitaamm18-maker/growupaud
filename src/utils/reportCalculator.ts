@@ -58,6 +58,7 @@ export function calculateStudentReportData(
     schoolName?: string;
     schoolAddress?: string;
     logoUrl?: string | null;
+    digitalSignatures?: any;
   }
 ): ReportCalculatedData {
   const canonicalDoc = buildCanonicalReportDocument(

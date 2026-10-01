@@ -109,7 +109,25 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
               setUser(firebaseUser);
               setError(null);
               setAdminExists(true);
-              schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role);
+
+              // Jika peran orang tua, pastikan relasi akun dengan data siswa terhubung sinkron
+              if (profile.role === 'PARENT' || profile.role === 'ORANG_TUA') {
+                firebaseUser
+                  .getIdToken()
+                  .then((token) => {
+                    return fetch('/api/parent/sync-student-link', {
+                      method: 'POST',
+                      headers: {
+                        'Content-Type': 'application/json',
+                        Authorization: `Bearer ${token}`,
+                      },
+                    });
+                  })
+                  .then(() => schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role))
+                  .catch((err) => console.warn('Parent auto-link sync notice:', err));
+              } else {
+                schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role);
+              }
             }
           } else {
             console.warn(`[PROFILE DOCUMENT NOT FOUND]\nUID: ${firebaseUser.uid}\nPath: ${profilePath}`);
@@ -152,11 +170,53 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       const projectId = auth.app.options.projectId;
 
-      // 1. Format internal email for Firebase Auth
-      const authEmail = formatAuthEmail(usernameClean);
+      // 1. Resolve Auth email (supports direct email, username-to-email resolution, and deterministic fallback)
+      let authEmail = '';
+      if (usernameClean.includes('@')) {
+        authEmail = usernameClean;
+      } else {
+        try {
+          const resolveRes = await fetch('/api/auth/resolve-email', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ username: usernameClean }),
+          });
+          if (resolveRes.ok) {
+            const resolveData = await resolveRes.json();
+            if (resolveData.success && resolveData.email) {
+              authEmail = resolveData.email;
+            }
+          }
+        } catch (resolveErr) {
+          console.warn('[AUTH] Username resolution server notice:', resolveErr);
+        }
+
+        if (!authEmail) {
+          authEmail = formatAuthEmail(usernameClean);
+        }
+      }
 
       // 2. Authenticate with Firebase Auth FIRST
-      const userCredential = await signInWithEmailAndPassword(auth, authEmail, passwordInput);
+      let userCredential;
+      try {
+        userCredential = await signInWithEmailAndPassword(auth, authEmail, passwordInput);
+      } catch (authTryErr: any) {
+        // Fallback for short class passwords (< 6 chars) or prefix differences (e.g. 'bulan' vs 'kelasbulan')
+        const lowerInput = passwordInput.toLowerCase().trim();
+        const altPassword = lowerInput.startsWith('kelas')
+          ? lowerInput.replace(/^kelas/, '')
+          : `kelas${lowerInput}`;
+
+        if (altPassword && altPassword !== passwordInput) {
+          try {
+            userCredential = await signInWithEmailAndPassword(auth, authEmail, altPassword);
+          } catch {
+            throw authTryErr;
+          }
+        } else {
+          throw authTryErr;
+        }
+      }
       const firebaseUser = userCredential.user;
 
       console.log(`[REAL AUTH]\nuid = ${firebaseUser.uid}\nemail = ${firebaseUser.email || authEmail}\nprojectId = ${projectId}`);
@@ -230,6 +290,22 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setUser(firebaseUser);
       setUserProfile(profile);
       setError(null);
+
+      // Jika peran orang tua, sinkronkan linking akun dengan data siswa di latar belakang
+      if (profile.role === 'PARENT' || profile.role === 'ORANG_TUA') {
+        try {
+          const token = await firebaseUser.getIdToken();
+          await fetch('/api/parent/sync-student-link', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              Authorization: `Bearer ${token}`,
+            },
+          });
+        } catch (linkErr) {
+          console.warn('Parent auto-link sync during login notice:', linkErr);
+        }
+      }
 
       // Synchronize school data for active user context using schoolId from Firestore profile
       await schoolStore.refreshFromFirestore(profile.schoolId || 'main-school', profile.role);

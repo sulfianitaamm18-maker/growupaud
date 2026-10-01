@@ -11,6 +11,7 @@ class ObservationStore {
   private currentSchoolId: string = 'main-school';
   private currentUserRole: string = 'TEACHER';
   private currentParentStudentIds: string[] = [];
+  private currentAuthUid: string = '';
 
   constructor() {
     // Initialized empty - NO fallback to INITIAL_OBSERVATIONS
@@ -43,6 +44,7 @@ class ObservationStore {
       this.unsubscribeFirestore();
       this.unsubscribeFirestore = null;
     }
+    this.currentAuthUid = '';
     this.observations = [];
     this.notify();
   }
@@ -60,9 +62,26 @@ class ObservationStore {
       return;
     }
 
+    const currentUid = auth.currentUser.uid;
+    const normalizedRole = role || 'TEACHER';
+    const studentIdsKey = (parentStudentIds || []).slice().sort().join(',');
+    const currentStudentIdsKey = this.currentParentStudentIds.slice().sort().join(',');
+
+    // Hindari tear-down listener Firestore yang sedang aktif jika konteks tidak berubah
+    if (
+      this.unsubscribeFirestore &&
+      this.currentSchoolId === schoolId &&
+      this.currentUserRole === normalizedRole &&
+      this.currentAuthUid === currentUid &&
+      currentStudentIdsKey === studentIdsKey
+    ) {
+      return;
+    }
+
     this.currentSchoolId = schoolId;
-    this.currentUserRole = role || 'TEACHER';
+    this.currentUserRole = normalizedRole;
     this.currentParentStudentIds = parentStudentIds || [];
+    this.currentAuthUid = currentUid;
 
     // Clean up existing listener
     if (this.unsubscribeFirestore) {
